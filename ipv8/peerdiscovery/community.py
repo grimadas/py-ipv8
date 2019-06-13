@@ -1,5 +1,6 @@
 from __future__ import absolute_import
 
+import csv
 from binascii import unhexlify
 from random import choice
 from time import time
@@ -42,6 +43,9 @@ class DiscoveryCommunity(Community):
                                  "cd500624376aec875a6e3028aab784cfaf0bac6527245db8d93900d904ac2a92"
                                  "2a02716ccef5a22f7968"))
 
+    peer_counters = {}
+    INTRO_THRESHOLD = 6
+
     def __init__(self, my_peer, endpoint, network, max_peers=DEFAULT_MAX_PEERS, anonymize=False):
         super(DiscoveryCommunity, self).__init__(my_peer, endpoint, network, max_peers=max_peers, anonymize=anonymize)
 
@@ -51,6 +55,11 @@ class DiscoveryCommunity(Community):
             chr(3): self.on_ping,
             chr(4): self.on_pong
         })
+
+        with open("network_7.csv", 'w') as csvfile:
+            fieldnames = ['From', 'To', 'Time']
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
 
     def get_available_strategies(self):
         return {'PeriodicSimilarity': PeriodicSimilarity, 'RandomChurn': RandomChurn}
@@ -82,6 +91,28 @@ class DiscoveryCommunity(Community):
 
     def introduction_response_callback(self, peer, dist, payload):
         self.send_similarity_request(peer.address)
+
+        if payload.wan_introduction_address != ("0.0.0.0", 0):
+            to_peer = str(payload.wan_introduction_address)
+        else:
+            to_peer = str(payload.lan_introduction_address)
+
+        edge_key = str(peer.address) + "-" + to_peer
+
+        if edge_key not in self.peer_counters.keys():
+            self.peer_counters[edge_key] = 0
+
+        self.peer_counters[edge_key] += 1
+
+        with open("network_7.csv", 'a') as csvfile:
+            fieldnames = ['From', 'To', 'Time']
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writerow({"From": str(peer.address), "To": to_peer, "Time": str(time())})
+
+        if self.peer_counters[edge_key] < self.INTRO_THRESHOLD:
+            self.walk_to(peer.address)
+        else:
+            print("Finished with peer " + str(peer.address))
 
     def send_similarity_request(self, address):
         my_peer_set = set([overlay.my_peer for overlay in self.network.service_overlays.values()])

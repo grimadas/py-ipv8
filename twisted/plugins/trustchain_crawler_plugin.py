@@ -56,33 +56,20 @@ crawler_config = {
     'logger': {
         'level': "ERROR"
     },
-    'walker_interval': 0.5,
+    'walker_interval': 0.05,
     'overlays': [
         {
-            'class': 'DiscoveryCommunity',
+            'class': 'TrustChainCommunity',
             'key': "my peer",
             'walkers': [
                 {
                     'strategy': "RandomWalk",
                     'peers': -1,
                     'init': {
-                        'timeout': 3.0
+                        'timeout': 5.0,
+                        'window_size': 0,
+                        'reset_chance': 30
                     }
-                },
-                {
-                    'strategy': "RandomChurn",
-                    'peers': -1,
-                    'init': {
-                        'sample_size': 64,
-                        'ping_interval': 10.0,
-                        'inactive_time': 30.0,
-                        'drop_time': 50.0
-                    }
-                },
-                {
-                    'strategy': "PeriodicSimilarity",
-                    'peers': -1,
-                    'init': {}
                 }
             ],
             'initialize': {
@@ -91,23 +78,6 @@ crawler_config = {
             'on_start': [
                 ('resolve_dns_bootstrap_addresses', )
             ]
-        }, {
-            'class': 'TrustChainCommunity',
-            'key': "my peer",
-            'walkers': [
-                {
-                    'strategy': "RandomWalk",
-                    'peers': -1,
-                    'init': {
-                        'timeout': 3.0
-                    }
-                },
-            ],
-            'initialize': {
-                'max_peers': -1,
-                'settings': tc_settings
-            },
-            'on_start': [],
         },
     ]
 }

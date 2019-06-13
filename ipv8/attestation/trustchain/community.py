@@ -5,12 +5,14 @@ Every node has a chain and these chains intertwine by blocks shared by chains.
 """
 from __future__ import absolute_import
 
+import csv
 import logging
 import random
 import struct
 from binascii import hexlify, unhexlify
 from functools import wraps
 from threading import RLock
+from time import time
 
 from twisted.internet import reactor
 from twisted.internet.defer import Deferred, fail, inlineCallbacks, maybeDeferred, returnValue, succeed
@@ -33,10 +35,12 @@ def synchronized(f):
     """
     Due to database inconsistencies, we can't allow multiple threads to handle a received_half_block at the same time.
     """
+
     @wraps(f)
     def wrapper(self, *args, **kwargs):
         with self.receive_block_lock:
             return f(self, *args, **kwargs)
+
     return wrapper
 
 
@@ -51,6 +55,8 @@ class TrustChainCommunity(Community):
     DB_CLASS = TrustChainDB
     DB_NAME = 'trustchain'
     version = b'\x02'
+    peer_counters = {}
+    INTRO_THRESHOLD = 2
 
     def __init__(self, *args, **kwargs):
         working_directory = kwargs.pop('working_directory', '')
@@ -78,6 +84,13 @@ class TrustChainCommunity(Community):
             chr(6): self.received_half_block_pair_broadcast,
             chr(7): self.received_empty_crawl_response,
         })
+
+        self.experiment_start_time = time()
+
+        with open("network_trust_6.csv", 'w') as csvfile:
+            fieldnames = ['From', 'To', 'Time']
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
 
     def do_db_cleanup(self):
         """
@@ -397,7 +410,7 @@ class TrustChainCommunity(Community):
             # this point. We already dropped invalids, so here we delay this message if the result is partial,
             # partial_previous or no-info. We send a crawl request to the requester to (hopefully) close the gap
             if (validation[0] == ValidationResult.partial_previous or validation[0] == ValidationResult.partial
-                    or validation[0] == ValidationResult.no_info) and self.settings.validation_range > 0:
+                or validation[0] == ValidationResult.no_info) and self.settings.validation_range > 0:
                 self.logger.info("Request block could not be validated sufficiently, crawling requester. %s",
                                  validation)
                 # Note that this code does not cover the scenario where we obtain this block indirectly.
@@ -527,8 +540,9 @@ class TrustChainCommunity(Community):
     @synchronized
     @lazy_wrapper(GlobalTimeDistributionPayload, CrawlRequestPayload)
     def received_crawl_request(self, peer, dist, payload):
-        self.logger.info("Received crawl request from node %s for range %d-%d",
-                         hexlify(peer.public_key.key_to_bin())[-8:], payload.start_seq_num, payload.end_seq_num)
+        # self.logger.info("Received crawl request from node %s for range %d-%d",
+        #                 hexlify(peer.public_key.key_to_bin())[-8:], payload.start_seq_num, payload.end_seq_num)
+        '''
         start_seq_num = payload.start_seq_num
         end_seq_num = payload.end_seq_num
 
@@ -554,6 +568,7 @@ class TrustChainCommunity(Community):
             self.endpoint.send(peer.address, packet)
         else:
             self.send_crawl_responses(blocks, peer, payload.crawl_id)
+        '''
 
     def send_crawl_responses(self, blocks, peer, crawl_id):
         """
@@ -657,6 +672,29 @@ class TrustChainCommunity(Community):
 
     @synchronized
     def introduction_response_callback(self, peer, dist, payload):
+
+        if payload.wan_introduction_address != ("0.0.0.0", 0):
+            to_peer = str(payload.wan_introduction_address)
+        else:
+            to_peer = str(payload.lan_introduction_address)
+
+        if peer.address not in self.peer_counters.keys():
+            self.peer_counters[peer.address] = {}
+            print("Discovered a new peer " + str(peer.address))
+        if to_peer not in self.peer_counters[peer.address]:
+            self.peer_counters[peer.address][to_peer] = 0
+            print("Discovered new connection "+str(peer.address)+" "+str(to_peer))
+
+        self.peer_counters[peer.address][to_peer] += 1
+        with open("network_trust_6.csv", 'a') as csvfile:
+            fieldnames = ['From', 'To', 'Time']
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writerow({"From": str(peer.address), "To": to_peer, "Time": str(time())})
+
+        if self.peer_counters[peer.address][to_peer] < self.INTRO_THRESHOLD:
+            self.walk_to(peer.address)
+
+        '''
         chain_length = None
         if payload.extra_bytes:
             chain_length = struct.unpack('>l', payload.extra_bytes)[0]
@@ -678,6 +716,7 @@ class TrustChainCommunity(Community):
             if known_blocks < 1000 or random.random() > 0.5:
                 self.request_cache.add(IntroCrawlTimeout(self, peer))
                 self.crawl_lowest_unknown(peer, latest_block_num=chain_length)
+        '''
 
     def unload(self):
         self.logger.debug("Unloading the TrustChain Community.")

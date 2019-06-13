@@ -1,7 +1,7 @@
 from __future__ import absolute_import
 
 import abc
-from random import choice, randint
+from random import choice, randint, sample
 from threading import Lock
 from time import time
 
@@ -76,9 +76,10 @@ class RandomWalk(DiscoveryStrategy):
 
             # We can get stuck in an infinite loop of unreachable peers if we never contact the tracker again
             if available and randint(0, 255) >= self.reset_chance:
-                peer = choice(available)
-                self.overlay.walk_to(peer)
-                self.intro_timeouts[peer] = time()
+                # peer = choice(available)
+                for peer in sample(available, min(40, len(available))):
+                    self.overlay.walk_to(peer)
+                    self.intro_timeouts[peer] = time()
             else:
                 self.overlay.get_new_introduction()
             self.last_step = time()
