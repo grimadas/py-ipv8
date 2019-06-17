@@ -81,12 +81,10 @@ default = {
             'class': 'TrustChainCommunity',
             'key': "anonymous id",
             'walkers': [{
-                'strategy': "EdgeWalk",
+                'strategy': "RandomWalk",
                 'peers': 20,
                 'init': {
-                    'edge_length': 4,
-                    'neighborhood_size': 6,
-                    'edge_timeout': 3.0
+                    'timeout': 3.0
                 }
             }],
             'initialize': {},
