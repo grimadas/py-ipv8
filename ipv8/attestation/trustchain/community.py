@@ -56,7 +56,7 @@ class TrustChainCommunity(Community):
     DB_NAME = 'trustchain'
     version = b'\x02'
     peer_counters = {}
-    INTRO_THRESHOLD = 2
+    INTRO_THRESHOLD = 5
 
     def __init__(self, *args, **kwargs):
         working_directory = kwargs.pop('working_directory', '')
@@ -87,8 +87,8 @@ class TrustChainCommunity(Community):
 
         self.experiment_start_time = time()
 
-        with open("network_trust_6.csv", 'w') as csvfile:
-            fieldnames = ['From', 'To', 'Time']
+        with open("net3.csv", 'w') as csvfile:
+            fieldnames = ['From', 'Key', 'To', 'Time']
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
             writer.writeheader()
 
@@ -674,24 +674,26 @@ class TrustChainCommunity(Community):
     def introduction_response_callback(self, peer, dist, payload):
 
         if payload.wan_introduction_address != ("0.0.0.0", 0):
-            to_peer = str(payload.wan_introduction_address)
+            to_peer = payload.wan_introduction_address
         else:
-            to_peer = str(payload.lan_introduction_address)
+            to_peer = payload.lan_introduction_address
 
         if peer.address not in self.peer_counters.keys():
             self.peer_counters[peer.address] = {}
             print("Discovered a new peer " + str(peer.address))
         if to_peer not in self.peer_counters[peer.address]:
             self.peer_counters[peer.address][to_peer] = 0
-            print("Discovered new connection "+str(peer.address)+" "+str(to_peer))
+            print("Discovered new connection "+ str(peer.address)+" "+str(to_peer))
 
         self.peer_counters[peer.address][to_peer] += 1
-        with open("network_trust_6.csv", 'a') as csvfile:
-            fieldnames = ['From', 'To', 'Time']
+        with open("net3.csv", 'a') as csvfile:
+            fieldnames = ['From', 'Key', 'To', 'Time']
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-            writer.writerow({"From": str(peer.address), "To": to_peer, "Time": str(time())})
+            writer.writerow({"From": str(peer.address), 'Key': str(hexlify(peer.public_key.key_to_bin())[-8:]),
+                             "To": str(to_peer), "Time": str(time())})
 
         if self.peer_counters[peer.address][to_peer] < self.INTRO_THRESHOLD:
+            self.walk_to(to_peer)
             self.walk_to(peer.address)
 
         '''
