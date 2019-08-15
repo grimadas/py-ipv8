@@ -1,10 +1,14 @@
 from __future__ import absolute_import
 
+from binascii import hexlify, unhexlify
+
+import orjson as json
+
 from twisted.trial import unittest
 
+from ipv8.keyvault.public.libnaclkey import LibNaCLPK
 from ....attestation.trustchain.block import EMPTY_SIG, GENESIS_HASH, GENESIS_SEQ, TrustChainBlock, ValidationResult
 from ....keyvault.crypto import default_eccrypto
-from ....messaging.deprecated.encoding import encode
 
 
 class TestBlock(TrustChainBlock):
@@ -19,14 +23,15 @@ class TestBlock(TrustChainBlock):
             link_pk = linked.public_key
             link_seq = linked.sequence_number
         else:
-            link_pk = crypto.generate_key(u"curve25519").pub().key_to_bin()
+            self.link_key = crypto.generate_key(u"curve25519")
+            link_pk = self.link_key.pub().key_to_bin()
             link_seq = 0
 
-        transaction = transaction or {b'id': 42}
+        transaction = transaction or {'id': 42}
 
         if previous:
             self.key = previous.key
-            TrustChainBlock.__init__(self, (block_type, encode(transaction), previous.public_key,
+            TrustChainBlock.__init__(self, (block_type, json.dumps(transaction), previous.public_key,
                                             previous.sequence_number + 1, link_pk, link_seq, previous.hash,
                                             EMPTY_SIG, 0, 0))
         else:
@@ -36,7 +41,7 @@ class TestBlock(TrustChainBlock):
                 self.key = crypto.generate_key(u"curve25519")
 
             TrustChainBlock.__init__(self, (block_type,
-                                            encode(transaction), self.key.pub().key_to_bin(), 1,
+                                            json.dumps(transaction), self.key.pub().key_to_bin(), 1,
                                             link_pk, link_seq,
                                             GENESIS_HASH,
                                             EMPTY_SIG, 0, 0))
@@ -45,7 +50,11 @@ class TestBlock(TrustChainBlock):
         self.transaction_validation_result = (ValidationResult.valid, [])
 
     def validate_transaction(self, database):
-        return self.transaction_validation_result
+        res, val = TrustChainBlock.validate_transaction(database)
+        if res!=ValidationResult.valid():
+            return res,val
+        else:
+            return self.transaction_validation_result
 
 
 class MockDatabase(object):
@@ -124,8 +133,11 @@ class TestTrustChainBlock(unittest.TestCase):
         Test creating a genesis block
         """
         key = default_eccrypto.generate_key(u"curve25519")
+
         db = MockDatabase()
-        block = TrustChainBlock.create(b'test', {b'id': 42}, db, key.pub().key_to_bin(), link=None)
+        tx = {"b'id'": 42, 'cond': hexlify(key.pub().key_to_bin()).decode('utf-8')}
+
+        block = TrustChainBlock.create(b'test', tx, db, key.pub().key_to_bin(), link=None)
         self.assertEqual(block.previous_hash, GENESIS_HASH)
         self.assertEqual(block.sequence_number, GENESIS_SEQ)
         self.assertEqual(block.public_key, key.pub().key_to_bin())
@@ -140,7 +152,7 @@ class TestTrustChainBlock(unittest.TestCase):
         prev = TestBlock()
         prev.sequence_number = GENESIS_SEQ
         db.add_block(prev)
-        block = TrustChainBlock.create(b'test', {b'id': 42}, db, prev.public_key, link=None)
+        block = TrustChainBlock.create(b'test', {'id': 42}, db, prev.public_key, link=None)
         self.assertEqual(block.previous_hash, prev.hash)
         self.assertEqual(block.sequence_number, 2)
         self.assertEqual(block.public_key, prev.public_key)
@@ -153,7 +165,7 @@ class TestTrustChainBlock(unittest.TestCase):
         db = MockDatabase()
         link = TestBlock()
         db.add_block(link)
-        block = TrustChainBlock.create(b'test', {b'id': 42}, db, key.pub().key_to_bin(), link=link)
+        block = TrustChainBlock.create(b'test', {'id': 42}, db, key.pub().key_to_bin(), link=link)
         self.assertEqual(block.previous_hash, GENESIS_HASH)
         self.assertEqual(block.sequence_number, GENESIS_SEQ)
         self.assertEqual(block.public_key, key.pub().key_to_bin())
@@ -321,6 +333,28 @@ class TestTrustChainBlock(unittest.TestCase):
         block.update_validation_level(prev_block, next_block, result)
 
         self.assertEqual(result.state, ValidationResult.partial_previous)
+
+    def test_valid_conditional_claim(self):
+        """
+        Conditional payment test
+        """
+        block = TestBlock(block_type=b'claim')
+        cond = hexlify(block.public_key).decode()
+        nonce = '4'
+        proof = hexlify(block.crypto.create_signature(block.key, nonce.encode())).decode()
+        block.transaction = {'proof':proof, 'condition':cond, 'nonce':nonce}
+
+        db = MockDatabase()
+        res, errors = block.validate_transaction(db)
+        self.assertEqual(ValidationResult.valid, res)
+
+    def test_invalid_conditional_claim(self):
+        """
+        """
+        block = TestBlock(transaction={"condition": 'test'}, block_type=b'claim')
+        db = MockDatabase()
+        res, errors = block.validate_transaction(db)
+        self.assertEqual(ValidationResult.invalid, res)
 
     def test_invariant_tx_errors(self):
         """
@@ -605,6 +639,7 @@ class TestTrustChainBlock(unittest.TestCase):
         """
         Test for error on double countersign fraud.
         """
+
         class FakeDB(object):
 
             def get_linked(self, _):

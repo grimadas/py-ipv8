@@ -139,7 +139,7 @@ else:
                     for strategy, target_peers in self.strategies:
                         peer_count = len(strategy.overlay.get_peers())
                         start_time = time.time()
-                        if (target_peers == -1) or (peer_count < target_peers):
+                        if strategy.should_continue and (target_peers == -1 or peer_count < target_peers):
                             # We wrap the take_step into a general except as it is prone to programmer error.
                             try:
                                 strategy.take_step()

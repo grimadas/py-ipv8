@@ -82,6 +82,9 @@ class TestTrustChainCommunity(TestBase):
             self.assertIsNotNone(self.nodes[node_nr].overlay.persistence.get(his_pubkey, 1))
             self.assertEqual(self.nodes[node_nr].overlay.persistence.get(his_pubkey, 1).link_sequence_number, 1)
 
+    def test_error(self):
+        self.assertTrue(False)
+
     @inlineCallbacks
     def test_get_linked(self):
         """
@@ -305,25 +308,32 @@ class TestTrustChainCommunity(TestBase):
         """
         # Let node 3 discover node 2.
         node3 = self.create_node()
+        node4 = self.create_node()
         self.nodes.append(node3)
+        self.nodes.append(node4)
         self.nodes[1].network.add_verified_peer(node3.my_peer)
         self.nodes[1].discovery.take_step()
 
+        self.nodes[2].network.add_verified_peer(node4.my_peer)
+        self.nodes[2].discovery.take_step()
+
         # TTL=1 (should not be relayed)
-        block = TestBlock()
+        block = TestBlock(key=self.nodes[0].my_peer.key)
         self.nodes[0].overlay.send_block(block, ttl=1)
         yield self.deliver_messages()
         self.assertIn(block.block_id, self.nodes[0].overlay.relayed_broadcasts)
         self.assertNotIn(block.block_id, self.nodes[1].overlay.relayed_broadcasts)
         self.assertNotIn(block.block_id, node3.overlay.relayed_broadcasts)
+        self.assertNotIn(block.block_id, node4.overlay.relayed_broadcasts)
 
         # TTL=2 (should be relayed)
-        block = TestBlock()
+        block = TestBlock(key=self.nodes[0].my_peer.key)
         self.nodes[0].overlay.send_block(block, ttl=2)
         yield self.deliver_messages()
         self.assertIn(block.block_id, self.nodes[0].overlay.relayed_broadcasts)
         self.assertIn(block.block_id, self.nodes[1].overlay.relayed_broadcasts)
         self.assertNotIn(block.block_id, node3.overlay.relayed_broadcasts)
+        self.assertNotIn(block.block_id, node4.overlay.relayed_broadcasts)
 
     @inlineCallbacks
     def test_broadcast_half_block_pair(self):
@@ -448,7 +458,7 @@ class TestTrustChainCommunity(TestBase):
         self.assertIsNotNone(block)
 
         # Create a Link Block
-        link_block, _ = yield self.nodes[1].overlay.create_link(block, b'link', additional_info={b'a': 1, b'b': 2})
+        link_block, _ = yield self.nodes[1].overlay.create_link(block, b'link', additional_info={'a': 1, 'b': 2})
         self.assertEqual(link_block.type, b'link')
         yield self.deliver_messages()
 
@@ -459,8 +469,8 @@ class TestTrustChainCommunity(TestBase):
         self.assertIsNotNone(block_node_0)
         self.assertIsNotNone(block_node_1)
 
-        self.assertEqual(block_node_0.transaction, {b'a': 1, b'b': 2})
-        self.assertEqual(block_node_1.transaction, {b'a': 1, b'b': 2})
+        self.assertEqual(block_node_0.transaction, {'a': 1, 'b': 2})
+        self.assertEqual(block_node_1.transaction, {'a': 1, 'b': 2})
 
     @inlineCallbacks
     def test_link_block_multiple(self):
@@ -474,8 +484,8 @@ class TestTrustChainCommunity(TestBase):
 
         block = self.nodes[1].overlay.persistence.get(source_peer_pubkey, 1)
 
-        yield self.nodes[1].overlay.create_link(block, b'link', additional_info={b'a': 1, b'b': 2})
-        yield self.nodes[1].overlay.create_link(block, b'link', additional_info={b'a': 2, b'b': 3})
+        yield self.nodes[1].overlay.create_link(block, b'link', additional_info={'a': 1, 'b': 2})
+        yield self.nodes[1].overlay.create_link(block, b'link', additional_info={'a': 2, 'b': 3})
         yield self.deliver_messages()
 
         self.assertEqual(len(self.nodes[0].overlay.persistence.get_all_linked(source_block)), 2)

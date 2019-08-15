@@ -7,7 +7,7 @@ from twisted.trial import unittest
 
 from ...keyvault.crypto import default_eccrypto
 from ...peer import Peer
-from ...peerdiscovery.network import Network
+from ...peerdiscovery.network import Network, Graph
 
 
 def _generate_peer():
@@ -24,6 +24,28 @@ class TestNetwork(unittest.TestCase):
         super(TestNetwork, self).setUp()
         self.network = Network()
 
+
+    def testGraphPaths(self):
+        graph = Graph()
+        graph.add_edge(1, 2)
+        graph.add_edge(1, 3)
+        graph.add_edge(1, 4)
+
+        graph.add_edge(2, 5)
+        graph.add_edge(2, 6)
+        graph.add_edge(6, 7)
+        graph.add_edge(5, 8)
+
+        graph.add_edge(3, 7)
+        graph.add_edge(4, 8)
+        graph.add_edge(4, 9)
+
+        graph.add_edge(1, 10)
+        graph.add_edge(10, 7)
+
+        paths = graph.get_path_to_peer(1, 7, cutoff=3)
+        self.assertEqual(3, len(paths))
+        
     def test_discover_address(self):
         """
         Check registration of introducer and introduced when a new address is discovered.

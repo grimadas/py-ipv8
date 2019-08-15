@@ -18,6 +18,10 @@ class DiscoveryStrategy(six.with_metaclass(abc.ABCMeta, object)):
         self.walk_lock = Lock()
 
     @abc.abstractmethod
+    def should_continue(self):
+        pass
+
+    @abc.abstractmethod
     def take_step(self):
         pass
 
@@ -27,7 +31,8 @@ class RandomWalk(DiscoveryStrategy):
     Walk randomly through the network.
     """
 
-    def __init__(self, overlay, timeout=3.0, window_size=5, reset_chance=50, target_interval=0):
+    def __init__(self, overlay, timeout=3.0, window_size=5, reset_chance=50, target_interval=0,
+                 total_run=None):
         """
         Create a new walk strategy.
 
@@ -49,6 +54,11 @@ class RandomWalk(DiscoveryStrategy):
         self.reset_chance = reset_chance
         self.target_interval = target_interval
         self.last_step = 0
+        self.total_run = total_run
+        self.start_time = time()
+
+    def should_continue(self):
+        return not self.total_run or self.total_run > time()-self.start_time
 
     def take_step(self):
         """
@@ -92,7 +102,7 @@ class EdgeWalk(DiscoveryStrategy):
     When a certain depth is reached, we teleport home and start again from our neighborhood.
     """
 
-    def __init__(self, overlay, edge_length=4, neighborhood_size=6, edge_timeout=3.0):
+    def __init__(self, overlay, edge_length=4, neighborhood_size=6, edge_timeout=3.0, total_run=None):
         super(EdgeWalk, self).__init__(overlay)
         self._neighborhood = []
 
@@ -103,6 +113,11 @@ class EdgeWalk(DiscoveryStrategy):
         self.edge_length = edge_length
         self.neighborhood_size = neighborhood_size
         self.edge_timeout = edge_timeout
+        self.total_run = total_run
+        self.start_time = time()
+
+    def should_continue(self):
+        return not self.total_run or self.total_run > time()-self.start_time
 
     def get_available_root(self):
         """
