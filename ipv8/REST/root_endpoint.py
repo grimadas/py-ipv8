@@ -9,6 +9,7 @@ from .noblock_dht_endpoint import NoBlockDHTEndpoint
 from .overlays_endpoint import OverlaysEndpoint
 from .trustchain_endpoint import TrustchainEndpoint
 from .tunnel_endpoint import TunnelEndpoint
+from .noodle_endpoint import NoodleEndpoint
 
 
 class RootEndpoint(BaseEndpoint):
@@ -32,3 +33,4 @@ class RootEndpoint(BaseEndpoint):
         self.putChild(b'overlays', OverlaysEndpoint(session))
         self.putChild(b'trustchain', TrustchainEndpoint(session))
         self.putChild(b'tunnel', TunnelEndpoint(session))
+        self.putChild(b'noodle', NoodleEndpoint(session))
