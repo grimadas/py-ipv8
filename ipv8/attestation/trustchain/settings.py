@@ -18,3 +18,12 @@ class TrustChainSettings(object):
 
         # Whether we are a crawler (and fetching whole chains)
         self.crawler = False
+
+        # Is the node hiding own blocks?
+        self.is_hiding = False
+
+        # TTL for informed information dissemination, depends on the topology
+        self.ttl = 3
+
+        # Use informed broadcast
+        self.use_informed_broadcast = False

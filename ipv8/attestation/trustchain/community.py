@@ -33,10 +33,12 @@ def synchronized(f):
     """
     Due to database inconsistencies, we can't allow multiple threads to handle a received_half_block at the same time.
     """
+
     @wraps(f)
     def wrapper(self, *args, **kwargs):
         with self.receive_block_lock:
             return f(self, *args, **kwargs)
+
     return wrapper
 
 
@@ -68,6 +70,7 @@ class TrustChainCommunity(Community):
         self.listeners_map = {}  # Map of block_type -> [callbacks]
         self.db_cleanup_lc = self.register_task("db_cleanup", LoopingCall(self.do_db_cleanup))
         self.db_cleanup_lc.start(600)
+        self.known_graph = {}
 
         self.decode_map.update({
             chr(1): self.received_half_block,
@@ -130,10 +133,64 @@ class TrustChainCommunity(Community):
 
         returnValue(False)
 
+    def informed_send_block(self, block1, block2=None, ttl=None, fanout=None):
+        """
+        Spread block among your verified peers.
+        """
+        global_time = self.claim_global_time()
+        dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
+        if block2:
+            if block1.link_sequence_number == UNKNOWN_SEQ:
+                block = block1
+            else:
+                block = block2
+        else:
+            block = block1
+        # Get information about the block counterparties
+        if not ttl:
+            ttl = self.settings.ttl
+        know_neigh = self.network.known_network.get_neighbours(block.public_key)
+        if not know_neigh:
+            # No neighbours known, spread randomly
+            if block2:
+                self.send_block_pair(block1, block2, ttl=ttl)
+            else:
+                self.send_block(block1, ttl=ttl)
+        else:
+            next_peers = set()
+            for neigh in know_neigh:
+                paths = self.network.known_network.get_path_to_peer(self.my_peer.public_key.key_to_bin(), neigh,
+                                                                    cutoff=ttl+1)
+                for p in paths:
+                    next_peers.add(p[1])
+            res_fanout = fanout if fanout else self.settings.broadcast_fanout
+            if len(next_peers) < res_fanout:
+                # There is not enough information to build paths - choose at random
+                for peer in random.sample(self.network.verified_peers, min(len(self.network.verified_peers),
+                                                                           res_fanout)):
+                    next_peers.add(peer.public_key.key_to_bin())
+            if len(next_peers) > res_fanout:
+                next_peers = random.sample(list(next_peers), res_fanout)
+
+            if block2:
+                payload = HalfBlockPairBroadcastPayload.from_half_blocks(block1, block2, ttl).to_pack_list()
+                packet = self._ez_pack(self._prefix, 6, [dist, payload], False)
+            else:
+                payload = HalfBlockBroadcastPayload.from_half_block(block, ttl).to_pack_list()
+                packet = self._ez_pack(self._prefix, 5, [dist, payload], False)
+
+            for peer_key in next_peers:
+                peer = self.network.get_verified_by_public_key_bin(peer_key)
+                self.logger.debug("Sending block to %s", peer)
+                self.endpoint.send(peer.address, packet)
+            self.relayed_broadcasts.append(block.block_id)
+
     def send_block(self, block, address=None, ttl=1):
         """
         Send a block to a specific address, or do a broadcast to known peers if no peer is specified.
         """
+        if ttl < 1:
+            return
         global_time = self.claim_global_time()
         dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
 
@@ -264,13 +321,13 @@ class TrustChainCommunity(Community):
         self.send_block(block, address=peer.address)
 
         # We broadcast the block in the network if we initiated a transaction
-        if block.type not in self.settings.block_types_bc_disabled and not linked:
-            self.send_block(block)
+        if block.type not in self.settings.block_types_bc_disabled and not linked and not self.settings.is_hiding:
+                self.send_block(block)
 
         if peer == self.my_peer:
             # We created a self-signed block
-            if block.type not in self.settings.block_types_bc_disabled:
-                self.send_block(block)
+            if block.type not in self.settings.block_types_bc_disabled and not self.settings.is_hiding:
+                    self.send_block(block)
 
             return succeed((block, None)) if public_key == ANY_COUNTERPARTY_PK else succeed((block, linked))
         elif not linked:
@@ -281,8 +338,10 @@ class TrustChainCommunity(Community):
         else:
             # We return a deferred that fires immediately with both half blocks.
             if block.type not in self.settings.block_types_bc_disabled:
-                self.send_block_pair(linked, block)
-
+                if self.settings.use_informed_broadcast:
+                    self.informed_send_block(linked, block)
+                else:
+                    self.send_block_pair(linked, block)
             return succeed((linked, block))
 
     @synchronized
@@ -306,7 +365,11 @@ class TrustChainCommunity(Community):
         self.validate_persist_block(block)
 
         if block.block_id not in self.relayed_broadcasts and payload.ttl > 0:
-            self.send_block(block, ttl=payload.ttl - 1)
+            if self.settings.use_informed_broadcast:
+                fanout = self.settings.broadcast_fanout - 1
+                self.informed_send_block(block, ttl=payload.ttl, fanout=fanout)
+            else:
+                self.send_block(block, ttl=payload.ttl)
 
     @synchronized
     @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, HalfBlockPairPayload)
@@ -330,7 +393,12 @@ class TrustChainCommunity(Community):
         self.validate_persist_block(block2)
 
         if block1.block_id not in self.relayed_broadcasts and payload.ttl > 0:
-            self.send_block_pair(block1, block2, ttl=payload.ttl - 1)
+            if self.settings.use_informed_broadcast:
+                fanout = self.settings.broadcast_fanout - 1
+                self.informed_send_block(block1, block2, ttl=payload.ttl, fanout=fanout)
+            else:
+                self.send_block_pair(block1, block2, ttl=payload.ttl)
+
 
     def validate_persist_block(self, block):
         """
@@ -339,6 +407,7 @@ class TrustChainCommunity(Community):
         :return: [ValidationResult]
         """
         validation = block.validate(self.persistence)
+        self.network.known_network.add_edge(block.public_key, block.link_public_key)
         if validation[0] == ValidationResult.invalid:
             pass
         elif not self.persistence.contains(block):
@@ -397,7 +466,7 @@ class TrustChainCommunity(Community):
             # this point. We already dropped invalids, so here we delay this message if the result is partial,
             # partial_previous or no-info. We send a crawl request to the requester to (hopefully) close the gap
             if (validation[0] == ValidationResult.partial_previous or validation[0] == ValidationResult.partial
-                    or validation[0] == ValidationResult.no_info) and self.settings.validation_range > 0:
+                or validation[0] == ValidationResult.no_info) and self.settings.validation_range > 0:
                 self.logger.info("Request block could not be validated sufficiently, crawling requester. %s",
                                  validation)
                 # Note that this code does not cover the scenario where we obtain this block indirectly.

@@ -1,5 +1,6 @@
 from __future__ import absolute_import
 
+from binascii import hexlify
 from threading import RLock
 from socket import inet_aton, inet_ntoa
 from struct import pack, unpack
@@ -7,6 +8,49 @@ from struct import pack, unpack
 from six.moves import xrange
 
 from ..util import cast_to_chr
+
+
+class Graph(object):
+
+    def __init__(self):
+        self._network = {}
+
+    def add_edge(self, p1, p2):
+        if p1 not in self._network.keys():
+            self._network[p1] = set()
+        if p2 not in self._network.keys():
+            self._network[p2] = set()
+        self._network[p1].add(p2)
+        self._network[p2].add(p1)
+
+    def get_path_to_peer(self, source, target, cutoff=3):
+        res_paths = []
+        if target in self._network[source]:
+            res_paths.append([source, target])
+        if cutoff == 1:
+            return res_paths
+        else:
+            # Perform BFS
+            for inters in self._network[source]:
+                res = self.get_path_to_peer(inters, target, cutoff-1)
+                for path in res:
+                    path.insert(0, source)
+                    res_paths.append(path)
+            return res_paths
+
+    def get_neighbours(self, peer):
+        if peer in self._network:
+            return self._network[peer]
+        else:
+            return None
+
+    def get_edge_list(self):
+        # Get edge list in readable format
+        edge_list = []
+        for p in self._network.keys():
+            for p2 in self._network[p]:
+                edge_list.append((hexlify(p)[-8:], hexlify(p2)[-8:]))
+        return edge_list
 
 
 class Network(object):
@@ -27,6 +71,10 @@ class Network(object):
         self.services_per_peer = {}
         # Map of service identifiers to local overlays
         self.service_overlays = {}
+
+        # Known connections from our peer
+        self.known_network = Graph()
+        self.my_peer = None
 
     def discover_address(self, peer, address, service=None):
         """
@@ -80,11 +128,16 @@ class Network(object):
                     # This should always happen, unless someone edits the verified_peers dict directly.
                     # This would be a programmer 'error', but we will allow it.
                     self.verified_peers.append(peer)
+                    if self.my_peer:
+                        self.known_network.add_edge(peer.public_key.key_to_bin(),
+                                                    self.my_peer.public_key.key_to_bin())
             elif peer.address not in self.blacklist:
                 if peer.address not in self._all_addresses:
                     self._all_addresses[peer.address] = ('', None)
                 if peer not in self.verified_peers:
                     self.verified_peers.append(peer)
+                    self.known_network.add_edge(peer.public_key.key_to_bin(),
+                                                self.my_peer.public_key.key_to_bin())
 
     def register_service_provider(self, service_id, overlay):
         """
@@ -95,6 +148,7 @@ class Network(object):
         """
         with self.graph_lock:
             self.service_overlays[service_id] = overlay
+            self.my_peer = overlay.my_peer
 
     def get_peers_for_service(self, service_id):
         """

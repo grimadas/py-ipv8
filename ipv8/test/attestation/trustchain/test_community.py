@@ -305,25 +305,32 @@ class TestTrustChainCommunity(TestBase):
         """
         # Let node 3 discover node 2.
         node3 = self.create_node()
+        node4 = self.create_node()
         self.nodes.append(node3)
+        self.nodes.append(node4)
         self.nodes[1].network.add_verified_peer(node3.my_peer)
         self.nodes[1].discovery.take_step()
 
+        self.nodes[2].network.add_verified_peer(node4.my_peer)
+        self.nodes[2].discovery.take_step()
+
         # TTL=1 (should not be relayed)
-        block = TestBlock()
+        block = TestBlock(key=self.nodes[0].my_peer.key)
         self.nodes[0].overlay.send_block(block, ttl=1)
         yield self.deliver_messages()
         self.assertIn(block.block_id, self.nodes[0].overlay.relayed_broadcasts)
         self.assertNotIn(block.block_id, self.nodes[1].overlay.relayed_broadcasts)
         self.assertNotIn(block.block_id, node3.overlay.relayed_broadcasts)
+        self.assertNotIn(block.block_id, node4.overlay.relayed_broadcasts)
 
         # TTL=2 (should be relayed)
-        block = TestBlock()
+        block = TestBlock(key=self.nodes[0].my_peer.key)
         self.nodes[0].overlay.send_block(block, ttl=2)
         yield self.deliver_messages()
         self.assertIn(block.block_id, self.nodes[0].overlay.relayed_broadcasts)
         self.assertIn(block.block_id, self.nodes[1].overlay.relayed_broadcasts)
         self.assertNotIn(block.block_id, node3.overlay.relayed_broadcasts)
+        self.assertNotIn(block.block_id, node4.overlay.relayed_broadcasts)
 
     @inlineCallbacks
     def test_broadcast_half_block_pair(self):
