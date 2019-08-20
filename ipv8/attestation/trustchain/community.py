@@ -160,7 +160,7 @@ class TrustChainCommunity(Community):
             next_peers = set()
             for neigh in know_neigh:
                 paths = self.network.known_network.get_path_to_peer(self.my_peer.public_key.key_to_bin(), neigh,
-                                                                    cutoff=ttl+1)
+                                                                    cutoff=ttl + 1)
                 for p in paths:
                     next_peers.add(p[1])
             res_fanout = fanout if fanout else self.settings.broadcast_fanout
@@ -203,8 +203,8 @@ class TrustChainCommunity(Community):
             self.logger.debug("Broadcasting block %s", block)
             payload = HalfBlockBroadcastPayload.from_half_block(block, ttl).to_pack_list()
             packet = self._ez_pack(self._prefix, 5, [dist, payload], False)
-            for peer in random.sample(self.network.verified_peers, min(len(self.network.verified_peers),
-                                                                       self.settings.broadcast_fanout)):
+
+            for peer in random.sample(self.get_peers(), min(len(self.get_peers()), self.settings.broadcast_fanout)):
                 self.endpoint.send(peer.address, packet)
             self.relayed_broadcasts.append(block.block_id)
 
@@ -224,8 +224,8 @@ class TrustChainCommunity(Community):
             self.logger.debug("Broadcasting blocks %s and %s", block1, block2)
             payload = HalfBlockPairBroadcastPayload.from_half_blocks(block1, block2, ttl).to_pack_list()
             packet = self._ez_pack(self._prefix, 6, [dist, payload], False)
-            for peer in random.sample(self.network.verified_peers, min(len(self.network.verified_peers),
-                                                                       self.settings.broadcast_fanout)):
+            for peer in random.sample(self.get_peers(), min(len(self.get_peers()),
+                                                            self.settings.broadcast_fanout)):
                 self.endpoint.send(peer.address, packet)
             self.relayed_broadcasts.append(block1.block_id)
 
@@ -322,12 +322,13 @@ class TrustChainCommunity(Community):
 
         # We broadcast the block in the network if we initiated a transaction
         if block.type not in self.settings.block_types_bc_disabled and not linked and not self.settings.is_hiding:
-                self.send_block(block)
+            self.send_block(block)
 
         if peer == self.my_peer:
             # We created a self-signed block
             if block.type not in self.settings.block_types_bc_disabled and not self.settings.is_hiding:
-                    self.send_block(block)
+                # self.send_block(block)
+                pass
 
             return succeed((block, None)) if public_key == ANY_COUNTERPARTY_PK else succeed((block, linked))
         elif not linked:
@@ -339,9 +340,11 @@ class TrustChainCommunity(Community):
             # We return a deferred that fires immediately with both half blocks.
             if block.type not in self.settings.block_types_bc_disabled:
                 if self.settings.use_informed_broadcast:
-                    self.informed_send_block(linked, block)
+                    # self.informed_send_block(linked, block)
+                    pass
                 else:
-                    self.send_block_pair(linked, block)
+                    # self.send_block_pair(linked, block)
+                    pass
             return succeed((linked, block))
 
     @synchronized
@@ -398,7 +401,6 @@ class TrustChainCommunity(Community):
                 self.informed_send_block(block1, block2, ttl=payload.ttl, fanout=fanout)
             else:
                 self.send_block_pair(block1, block2, ttl=payload.ttl)
-
 
     def validate_persist_block(self, block):
         """
