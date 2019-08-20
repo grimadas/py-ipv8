@@ -204,9 +204,10 @@ class TrustChainCommunity(Community):
             payload = HalfBlockBroadcastPayload.from_half_block(block, ttl).to_pack_list()
             packet = self._ez_pack(self._prefix, 5, [dist, payload], False)
 
-            for peer in random.sample(self.get_peers(), min(len(self.get_peers()), self.settings.broadcast_fanout)):
-                reactor.callInThread(self.endpoint.send, peer.address, packet)
-                # self.endpoint.send(peer.address, packet)
+            any(self.endpoint.send(peer.address, packet) for
+                peer in random.sample(self.get_peers(), min(len(self.get_peers()),
+                                                            self.settings.broadcast_fanout)))
+
             self.relayed_broadcasts.append(block.block_id)
 
     def send_block_pair(self, block1, block2, address=None, ttl=1):
