@@ -314,7 +314,8 @@ class TrustChainCommunity(Community):
         # This is a source block with no counterparty
         if not peer and public_key == ANY_COUNTERPARTY_PK:
             if block.type not in self.settings.block_types_bc_disabled:
-                self.send_block(block)
+                # self.send_block(block)
+                pass
             return succeed((block, None))
 
         # If there is a counterparty to sign, we send it
@@ -322,7 +323,8 @@ class TrustChainCommunity(Community):
 
         # We broadcast the block in the network if we initiated a transaction
         if block.type not in self.settings.block_types_bc_disabled and not linked and not self.settings.is_hiding:
-            self.send_block(block)
+            # self.send_block(block)
+            pass
 
         if peer == self.my_peer:
             # We created a self-signed block
