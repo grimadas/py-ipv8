@@ -179,10 +179,13 @@ class TrustChainCommunity(Community):
                 payload = HalfBlockBroadcastPayload.from_half_block(block, ttl).to_pack_list()
                 packet = self._ez_pack(self._prefix, 5, [dist, payload], False)
 
+            ind = 1
             for peer_key in next_peers:
                 peer = self.network.get_verified_by_public_key_bin(peer_key)
                 self.logger.debug("Sending block to %s", peer)
-                self.endpoint.send(peer.address, packet)
+                reactor.callLater(0.05 * ind, self.endpoint.send, peer.address, packet)
+                ind += 1
+
             self.relayed_broadcasts.append(block.block_id)
 
     def send_block(self, block, address=None, ttl=1):
@@ -208,7 +211,7 @@ class TrustChainCommunity(Community):
                                                                             self.settings.broadcast_fanout))]
             ind = 1
             for p in peers:
-                reactor.callLater(0.1*ind, self.endpoint.send, p, packet)
+                reactor.callLater(0.05*ind, self.endpoint.send, p, packet)
                 ind += 1
 
             self.relayed_broadcasts.append(block.block_id)
@@ -229,9 +232,14 @@ class TrustChainCommunity(Community):
             self.logger.debug("Broadcasting blocks %s and %s", block1, block2)
             payload = HalfBlockPairBroadcastPayload.from_half_blocks(block1, block2, ttl).to_pack_list()
             packet = self._ez_pack(self._prefix, 6, [dist, payload], False)
-            for peer in random.sample(self.get_peers(), min(len(self.get_peers()),
-                                                            self.settings.broadcast_fanout)):
-                self.endpoint.send(peer.address, packet)
+
+            peers = [p.address for p in random.sample(self.get_peers(), min(len(self.get_peers()),
+                                                                            self.settings.broadcast_fanout))]
+            ind = 1
+            for p in peers:
+                reactor.callLater(0.05*ind, self.endpoint.send, p, packet)
+                ind += 1
+
             self.relayed_broadcasts.append(block1.block_id)
 
     def self_sign_block(self, block_type=b'unknown', transaction=None):
@@ -333,7 +341,6 @@ class TrustChainCommunity(Community):
             # We created a self-signed block
             if block.type not in self.settings.block_types_bc_disabled and not self.settings.is_hiding:
                 self.send_block(block)
-
             return succeed((block, None)) if public_key == ANY_COUNTERPARTY_PK else succeed((block, linked))
         elif not linked:
             # We keep track of this outstanding sign request.
@@ -344,11 +351,9 @@ class TrustChainCommunity(Community):
             # We return a deferred that fires immediately with both half blocks.
             if block.type not in self.settings.block_types_bc_disabled:
                 if self.settings.use_informed_broadcast:
-                    # self.informed_send_block(linked, block)
-                    pass
+                    self.informed_send_block(linked, block)
                 else:
-                    # self.send_block_pair(linked, block)
-                    pass
+                    self.send_block_pair(linked, block)
             return succeed((linked, block))
 
     @synchronized
