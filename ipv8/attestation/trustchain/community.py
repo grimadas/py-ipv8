@@ -273,7 +273,7 @@ class TrustChainCommunity(Community):
 
     @synchronized
     def sign_block(self, peer, public_key=EMPTY_PK, block_type=b'unknown', transaction=None, linked=None,
-                   additional_info=None):
+                   additional_info=None, double_spend_block=None):
         """
         Create, sign, persist and send a block signed message
         :param peer: The peer with whom you have interacted, as a IPv8 peer
@@ -282,6 +282,7 @@ class TrustChainCommunity(Community):
         :param transaction: A string describing the interaction in this block
         :param linked: The block that the requester is asking us to sign
         :param additional_info: Stores additional information, on the transaction
+        :param double_spend_block: Number of block if you want to double sign
         """
         # NOTE to the future: This method reads from the database, increments and then writes back. If in some future
         # this method is allowed to execute in parallel, be sure to lock from before .create up to after .add_block
@@ -310,7 +311,7 @@ class TrustChainCommunity(Community):
         block = self.get_block_class(block_type).create(block_type, transaction, self.persistence,
                                                         self.my_peer.public_key.key_to_bin(),
                                                         link=linked, additional_info=additional_info,
-                                                        link_pk=public_key)
+                                                        link_pk=public_key, double_spend_seq=double_spend_block)
         block.sign(self.my_peer.key)
 
         validation = block.validate(self.persistence)

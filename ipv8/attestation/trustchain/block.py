@@ -13,8 +13,7 @@ from ...messaging.deprecated.encoding import decode, encode
 from ...messaging.serialization import default_serializer
 from ...util import old_round
 
-
-GENESIS_HASH = b'0' * 32    # ID of the first block of the chain.
+GENESIS_HASH = b'0' * 32  # ID of the first block of the chain.
 GENESIS_SEQ = 1
 UNKNOWN_SEQ = 0
 EMPTY_SIG = b'0' * 64
@@ -310,8 +309,8 @@ class TrustChainBlock(object):
             if blk.signature != self.signature:
                 result.err("Signature does not match known block")
             # if the known block is not equal, and the signatures are valid, we have a double signed PK/seq. Fraud!
-            if self.hash != blk.hash and "Invalid signature" not in result.errors and\
-               "Public key is not valid" not in result.errors:
+            if self.hash != blk.hash and "Invalid signature" not in result.errors and \
+                    "Public key is not valid" not in result.errors:
                 result.err("Double sign fraud")
                 database.add_double_spend(blk, self)
 
@@ -391,7 +390,8 @@ class TrustChainBlock(object):
         self.hash = self.calculate_hash()
 
     @classmethod
-    def create(cls, block_type, transaction, database, public_key, link=None, additional_info=None, link_pk=None):
+    def create(cls, block_type, transaction, database, public_key, link=None, additional_info=None, link_pk=None,
+               double_spend_seq=None):
         """
         Create an empty next block.
         :param block_type: the type of the block to be constructed
@@ -402,9 +402,13 @@ class TrustChainBlock(object):
         :param additional_info: additional information, which has a higher priority than the
                transaction when link exists
         :param link_pk: the public key of the counterparty in this transaction
+        :param double_spend_seq: If is not none Will create a double spend block with
         :return: A newly created block
         """
-        blk = database.get_latest(public_key)
+        if double_spend_seq:
+            blk = database.get(public_key, double_spend_seq)
+        else:
+            blk = database.get_latest(public_key)
         ret = cls()
         if link:
             ret.type = link.type if link.link_public_key != ANY_COUNTERPARTY_PK else block_type
