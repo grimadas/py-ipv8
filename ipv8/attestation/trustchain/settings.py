@@ -27,3 +27,6 @@ class TrustChainSettings(object):
 
         # Use informed broadcast
         self.use_informed_broadcast = False
+
+        # Ignore validation errors
+        self.ignore_validation = False

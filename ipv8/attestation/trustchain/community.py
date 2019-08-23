@@ -211,7 +211,7 @@ class TrustChainCommunity(Community):
                                                                             self.settings.broadcast_fanout))]
             ind = 1
             for p in peers:
-                reactor.callLater(0.05*ind, self.endpoint.send, p, packet)
+                reactor.callLater(0.05 * ind, self.endpoint.send, p, packet)
                 ind += 1
 
             self.relayed_broadcasts.append(block.block_id)
@@ -237,7 +237,7 @@ class TrustChainCommunity(Community):
                                                                             self.settings.broadcast_fanout))]
             ind = 1
             for p in peers:
-                reactor.callLater(0.05*ind, self.endpoint.send, p, packet)
+                reactor.callLater(0.05 * ind, self.endpoint.send, p, packet)
                 ind += 1
 
             self.relayed_broadcasts.append(block1.block_id)
@@ -317,7 +317,8 @@ class TrustChainCommunity(Community):
         validation = block.validate(self.persistence)
         self.logger.info("Signed block to %s (%s) validation result %s",
                          hexlify(block.link_public_key)[-8:], block, validation)
-        if validation[0] != ValidationResult.partial_next and validation[0] != ValidationResult.valid:
+        if not self.settings.ignore_validation and validation[0] != ValidationResult.partial_next \
+                and validation[0] != ValidationResult.valid:
             self.logger.error("Signed block did not validate?! Result %s", repr(validation))
             return fail(RuntimeError("Signed block did not validate."))
 
@@ -420,12 +421,12 @@ class TrustChainCommunity(Community):
         """
         validation = block.validate(self.persistence)
         self.network.known_network.add_edge(block.public_key, block.link_public_key)
-        if validation[0] == ValidationResult.invalid:
+        if not self.settings.ignore_validation and validation[0] == ValidationResult.invalid:
             pass
-        elif not self.persistence.contains(block):
-            self.persistence.add_block(block)
+        else:
             self.notify_listeners(block)
-
+            if not self.persistence.contains(block):
+                self.persistence.add_block(block)
         return validation
 
     def notify_listeners(self, block):
@@ -450,7 +451,7 @@ class TrustChainCommunity(Community):
         """
         validation = self.validate_persist_block(blk)
         self.logger.info("Block validation result %s, %s, (%s)", validation[0], validation[1], blk)
-        if validation[0] == ValidationResult.invalid:
+        if not self.settings.ignore_validation and validation[0] == ValidationResult.invalid:
             return fail(RuntimeError("Block could not be validated: %s, %s" % (validation[0], validation[1])))
 
         # Check if we are waiting for this signature response
@@ -659,7 +660,8 @@ class TrustChainCommunity(Community):
             self.logger.debug("No latest block found when trying to recover database!")
             return
         validation = self.validate_persist_block(block)
-        while validation[0] != ValidationResult.partial_next and validation[0] != ValidationResult.valid:
+        while not self.settings.ignore_validation and validation[0] != ValidationResult.partial_next \
+                and validation[0] != ValidationResult.valid:
             # The latest block is invalid, remove it.
             self.persistence.remove_block(block)
             self.logger.error("Removed invalid block %d from our chain", block.sequence_number)
@@ -678,7 +680,8 @@ class TrustChainCommunity(Community):
         if not block:
             return
         validation = self.validate_persist_block(block)
-        if validation[0] != ValidationResult.partial_next and validation[0] != ValidationResult.valid:
+        if not self.settings.ignore_validation and validation[0] != ValidationResult.partial_next \
+                and validation[0] != ValidationResult.valid:
             self.logger.error("Our chain did not validate. Result %s", repr(validation))
             self.sanitize_database()
 
@@ -687,7 +690,7 @@ class TrustChainCommunity(Community):
 
         # Don't answer with any invalid blocks.
         validation = self.validate_persist_block(block)
-        if validation[0] == ValidationResult.invalid and total_count > 0:
+        if not self.settings.ignore_validation and validation[0] == ValidationResult.invalid and total_count > 0:
             # We send an empty block to the crawl requester if no blocks should be sent back
             self.logger.error("Not sending crawl response, the block is invalid. Result %s", repr(validation))
             self.persistence_integrity_check()
