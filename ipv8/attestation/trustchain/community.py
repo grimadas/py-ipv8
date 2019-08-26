@@ -347,8 +347,12 @@ class TrustChainCommunity(Community):
         elif not linked:
             # We keep track of this outstanding sign request.
             sign_deferred = Deferred()
-            self.request_cache.add(HalfBlockSignCache(self, block, sign_deferred, peer.address))
-            return sign_deferred
+            # Check if we are waiting for this signature response
+            block_id_int = int(hexlify(block.block_id), 16) % 100000000
+            if not self.request_cache.has(u'sign', block_id_int):
+                self.request_cache.add(HalfBlockSignCache(self, block, sign_deferred, peer.address))
+                return sign_deferred
+            return succeed((block, None))
         else:
             # We return a deferred that fires immediately with both half blocks.
             if block.type not in self.settings.block_types_bc_disabled:
