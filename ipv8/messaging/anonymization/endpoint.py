@@ -25,6 +25,7 @@ class TunnelEndpoint(object):
         self.settings[prefix] = enable
 
     def send(self, address, packet):
+        print(len(packet))
         prefix = packet[:22]
         if not self.settings.get(prefix, False):
             self.endpoint.send(address, packet)
