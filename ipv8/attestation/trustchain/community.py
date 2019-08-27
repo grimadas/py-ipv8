@@ -166,7 +166,7 @@ class TrustChainCommunity(Community):
             res_fanout = fanout if fanout else self.settings.broadcast_fanout
             if len(next_peers) < res_fanout:
                 # There is not enough information to build paths - choose at random
-                for peer in random.sample(self.network.verified_peers, min(len(self.network.verified_peers),
+                for peer in random.sample(self.get_peers(), min(len(self.get_peers()),
                                                                            res_fanout)):
                     next_peers.add(peer.public_key.key_to_bin())
             if len(next_peers) > res_fanout:
@@ -385,9 +385,9 @@ class TrustChainCommunity(Community):
         if block.block_id not in self.relayed_broadcasts and payload.ttl > 0:
             if self.settings.use_informed_broadcast:
                 fanout = self.settings.broadcast_fanout - 1
-                self.informed_send_block(block, ttl=payload.ttl, fanout=fanout)
+                reactor.callLater(0.5 * random.random(), self.informed_send_block, block, ttl=payload.ttl, fanout=fanout)
             else:
-                self.send_block(block, ttl=payload.ttl)
+                reactor.callLater(0.5 * random.random(), self.send_block, block, ttl=payload.ttl)
 
     @synchronized
     @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, HalfBlockPairPayload)
@@ -413,9 +413,10 @@ class TrustChainCommunity(Community):
         if block1.block_id not in self.relayed_broadcasts and payload.ttl > 0:
             if self.settings.use_informed_broadcast:
                 fanout = self.settings.broadcast_fanout - 1
-                self.informed_send_block(block1, block2, ttl=payload.ttl, fanout=fanout)
+                reactor.callLater(0.5 * random.random(), self.informed_send_block, block1, block2, ttl=payload.ttl,
+                                  fanout=fanout)
             else:
-                self.send_block_pair(block1, block2, ttl=payload.ttl)
+                reactor.callLater(0.5 * random.random(), self.send_block_pair, block1, block2, ttl=payload.ttl)
 
     def validate_persist_block(self, block):
         """

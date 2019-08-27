@@ -40,7 +40,6 @@ class UDPEndpoint(Endpoint, protocol.DatagramProtocol):
         :param packet: The packet to send.
         """
         self.assert_open()
-        print ("UDP Packet size ", len(packet))
         try:
             self.transport.write(packet, socket_address)
             self.bytes_up += len(packet)
