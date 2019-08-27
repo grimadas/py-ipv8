@@ -179,12 +179,10 @@ class TrustChainCommunity(Community):
                 payload = HalfBlockBroadcastPayload.from_half_block(block, ttl).to_pack_list()
                 packet = self._ez_pack(self._prefix, 5, [dist, payload], False)
 
-            ind = 1
             for peer_key in next_peers:
                 peer = self.network.get_verified_by_public_key_bin(peer_key)
                 self.logger.debug("Sending block to %s", peer)
-                reactor.callLater(0.05 * ind, self.endpoint.send, peer.address, packet)
-                ind += 1
+                reactor.callLater(0.5 * random.random(), self.endpoint.send, peer.address, packet)
 
             self.relayed_broadcasts.append(block.block_id)
 
@@ -211,7 +209,7 @@ class TrustChainCommunity(Community):
                                                                             self.settings.broadcast_fanout))]
             ind = 1
             for p in peers:
-                reactor.callLater(0.05 * ind, self.endpoint.send, p, packet)
+                reactor.callLater(0.5 * random.random(), self.endpoint.send, p, packet)
                 ind += 1
 
             self.relayed_broadcasts.append(block.block_id)
@@ -380,12 +378,12 @@ class TrustChainCommunity(Community):
         """
         payload.ttl -= 1
         block = self.get_block_class(payload.type).from_payload(payload, self.serializer)
-        self.validate_persist_block(block)
+        #self.validate_persist_block(block)
 
         if block.block_id not in self.relayed_broadcasts and payload.ttl > 0:
             if self.settings.use_informed_broadcast:
                 fanout = self.settings.broadcast_fanout - 1
-                #reactor.callLater(0.5 * random.random(), self.informed_send_block, block, ttl=payload.ttl, fanout=fanout)
+                self.informed_send_block( block, ttl=payload.ttl, fanout=fanout)
             else:
                 reactor.callLater(0.5 * random.random(), self.send_block, block, ttl=payload.ttl)
 
@@ -407,14 +405,14 @@ class TrustChainCommunity(Community):
         """
         payload.ttl -= 1
         block1, block2 = self.get_block_class(payload.type1).from_pair_payload(payload, self.serializer)
-        self.validate_persist_block(block1)
-        self.validate_persist_block(block2)
+        #self.validate_persist_block(block1)
+        #self.validate_persist_block(block2)
 
         if block1.block_id not in self.relayed_broadcasts and payload.ttl > 0:
             if self.settings.use_informed_broadcast:
                 fanout = self.settings.broadcast_fanout - 1
-                #reactor.callLater(0.5 * random.random(), self.informed_send_block, block1, block2, ttl=payload.ttl,
-                #                  fanout=fanout)
+                reactor.callLater(0.5 * random.random(), self.informed_send_block, block1, block2, ttl=payload.ttl,
+                                  fanout=fanout)
                 pass
             else:
                 reactor.callLater(0.5 * random.random(), self.send_block_pair, block1, block2, ttl=payload.ttl)
