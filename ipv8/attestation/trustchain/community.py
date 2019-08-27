@@ -378,6 +378,7 @@ class TrustChainCommunity(Community):
         """
         payload.ttl -= 1
         block = self.get_block_class(payload.type).from_payload(payload, self.serializer)
+        self.update_notify(block)
         #self.validate_persist_block(block)
 
         if block.block_id not in self.relayed_broadcasts and payload.ttl > 0:
@@ -405,6 +406,8 @@ class TrustChainCommunity(Community):
         """
         payload.ttl -= 1
         block1, block2 = self.get_block_class(payload.type1).from_pair_payload(payload, self.serializer)
+        self.update_notify(block1)
+        self.update_notify(block2)
         #self.validate_persist_block(block1)
         #self.validate_persist_block(block2)
 
@@ -416,6 +419,11 @@ class TrustChainCommunity(Community):
                 pass
             else:
                 reactor.callLater(0.5 * random.random(), self.send_block_pair, block1, block2, ttl=payload.ttl)
+
+    def update_notify(self, block):
+        self.network.known_network.add_edge(block.public_key, block.link_public_key)
+        self.notify_listeners(block)
+
 
     def validate_persist_block(self, block):
         """
