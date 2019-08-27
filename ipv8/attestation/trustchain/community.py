@@ -301,7 +301,7 @@ class TrustChainCommunity(Community):
         assert transaction is None or isinstance(transaction, dict), "Transaction should be a dictionary"
         assert additional_info is None or isinstance(additional_info, dict), "Additional info should be a dictionary"
 
-        self.persistence_integrity_check()
+        #self.persistence_integrity_check()
 
         if linked and linked.link_public_key != ANY_COUNTERPARTY_PK:
             block_type = linked.type
@@ -312,17 +312,20 @@ class TrustChainCommunity(Community):
                                                         link_pk=public_key, double_spend_seq=double_spend_block)
         block.sign(self.my_peer.key)
 
-        validation = block.validate(self.persistence)
+        #validation = block.validate(self.persistence)
+        '''
         self.logger.info("Signed block to %s (%s) validation result %s",
                          hexlify(block.link_public_key)[-8:], block, validation)
         if not self.settings.ignore_validation and validation[0] != ValidationResult.partial_next \
                 and validation[0] != ValidationResult.valid:
             self.logger.error("Signed block did not validate?! Result %s", repr(validation))
             return fail(RuntimeError("Signed block did not validate."))
+        '''
 
         if not self.persistence.contains(block):
             self.persistence.add_block(block)
-            self.notify_listeners(block)
+            self.update_notify(block)
+            #self.notify_listeners(block)
 
         # This is a source block with no counterparty
         if not peer and public_key == ANY_COUNTERPARTY_PK:
