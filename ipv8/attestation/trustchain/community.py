@@ -385,7 +385,7 @@ class TrustChainCommunity(Community):
         if block.block_id not in self.relayed_broadcasts and payload.ttl > 0:
             if self.settings.use_informed_broadcast:
                 fanout = self.settings.broadcast_fanout - 1
-                reactor.callLater(0.5 * random.random(), self.informed_send_block, block, ttl=payload.ttl, fanout=fanout)
+                #reactor.callLater(0.5 * random.random(), self.informed_send_block, block, ttl=payload.ttl, fanout=fanout)
             else:
                 reactor.callLater(0.5 * random.random(), self.send_block, block, ttl=payload.ttl)
 
@@ -413,8 +413,9 @@ class TrustChainCommunity(Community):
         if block1.block_id not in self.relayed_broadcasts and payload.ttl > 0:
             if self.settings.use_informed_broadcast:
                 fanout = self.settings.broadcast_fanout - 1
-                reactor.callLater(0.5 * random.random(), self.informed_send_block, block1, block2, ttl=payload.ttl,
-                                  fanout=fanout)
+                #reactor.callLater(0.5 * random.random(), self.informed_send_block, block1, block2, ttl=payload.ttl,
+                #                  fanout=fanout)
+                pass
             else:
                 reactor.callLater(0.5 * random.random(), self.send_block_pair, block1, block2, ttl=payload.ttl)
 
