@@ -398,8 +398,10 @@ class TrustChainCommunity(Community):
         We received a block pair message.
         """
         block1, block2 = self.get_block_class(payload.type1).from_pair_payload(payload, self.serializer)
-        self.validate_persist_block(block1)
-        self.validate_persist_block(block2)
+        self.update_notify(block1)
+        self.update_notify(block2)
+        #self.validate_persist_block(block1)
+        #self.validate_persist_block(block2)
 
     @synchronized
     @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, HalfBlockPairBroadcastPayload)
@@ -417,9 +419,7 @@ class TrustChainCommunity(Community):
         if block1.block_id not in self.relayed_broadcasts and payload.ttl > 0:
             if self.settings.use_informed_broadcast:
                 fanout = self.settings.broadcast_fanout - 1
-                reactor.callLater(0.5 * random.random(), self.informed_send_block, block1, block2, ttl=payload.ttl,
-                                  fanout=fanout)
-                pass
+                self.informed_send_block( block1, block2, ttl=payload.ttl, fanout=fanout)
             else:
                 reactor.callLater(0.5 * random.random(), self.send_block_pair, block1, block2, ttl=payload.ttl)
 
@@ -471,12 +471,15 @@ class TrustChainCommunity(Community):
         """
         Process a received half block.
         """
-        validation = self.validate_persist_block(blk)
-        self.logger.info("Block validation result %s, %s, (%s)", validation[0], validation[1], blk)
-        if not self.settings.ignore_validation and validation[0] == ValidationResult.invalid:
-            return fail(RuntimeError("Block could not be validated: %s, %s" % (validation[0], validation[1])))
+        #validation = self.validate_persist_block(blk)
+        #self.logger.info("Block validation result %s, %s, (%s)", validation[0], validation[1], blk)
+        #if not self.settings.ignore_validation and validation[0] == ValidationResult.invalid:
+        #    return fail(RuntimeError("Block could not be validated: %s, %s" % (validation[0], validation[1])))
+
+
 
         # Check if we are waiting for this signature response
+        self.update_notify(blk)
         link_block_id_int = int(hexlify(blk.linked_block_id), 16) % 100000000
         if self.request_cache.has(u'sign', link_block_id_int):
             cache = self.request_cache.pop(u'sign', link_block_id_int)
@@ -500,7 +503,7 @@ class TrustChainCommunity(Community):
             # It is important that the request matches up with its previous block, gaps cannot be tolerated at
             # this point. We already dropped invalids, so here we delay this message if the result is partial,
             # partial_previous or no-info. We send a crawl request to the requester to (hopefully) close the gap
-            if (validation[0] == ValidationResult.partial_previous or validation[0] == ValidationResult.partial
+            '''if (validation[0] == ValidationResult.partial_previous or validation[0] == ValidationResult.partial
                 or validation[0] == ValidationResult.no_info) and self.settings.validation_range > 0:
                 self.logger.info("Request block could not be validated sufficiently, crawling requester. %s",
                                  validation)
@@ -513,11 +516,11 @@ class TrustChainCommunity(Community):
                                                              max(GENESIS_SEQ, blk.sequence_number - 1),
                                                              for_half_block=blk)
                     return addCallback(crawl_deferred, lambda _: self.process_half_block(blk, peer))
-            else:
-                return self.sign_block(peer, linked=blk)
+            else:'''
+        return self.sign_block(peer, linked=blk)
 
         # determine if we want to sign this block
-        return addCallback(self.should_sign(blk), on_should_sign_outcome)
+        #return addCallback(self.should_sign(blk), on_should_sign_outcome)
 
     def crawl_chain(self, peer, latest_block_num=0):
         """
