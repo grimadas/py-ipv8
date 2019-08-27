@@ -186,7 +186,9 @@ class TrustChainCommunity(Community):
                 peer = self.network.get_verified_by_public_key_bin(peer_key)
                 self.logger.debug("Sending block to %s", peer)
                 p = peer.address
-                self.endpoint.send(p, packet)
+                self.register_anonymous_task("informed_send_block",
+                                             reactor.callLater(random.random() * 0.2,
+                                                               self.endpoint.send, p, packet))
 
             self.relayed_broadcasts.append(block.block_id)
 
@@ -212,7 +214,8 @@ class TrustChainCommunity(Community):
             peers = (p.address for p in random.sample(self.get_peers(), min(len(self.get_peers()),
                                                                             self.settings.broadcast_fanout)))
             for p in peers:
-                self.endpoint.send(p, packet)
+                self.register_anonymous_task("send_block",
+                                             reactor.callLater(random.random() * 0.2, self.endpoint.send, p, packet))
 
             self.relayed_broadcasts.append(block.block_id)
 
@@ -236,7 +239,8 @@ class TrustChainCommunity(Community):
             peers = (p.address for p in random.sample(self.get_peers(), min(len(self.get_peers()),
                                                                             self.settings.broadcast_fanout)))
             for p in peers:
-                self.endpoint.send(p, packet)
+                self.register_anonymous_task("send_block_pair",
+                                             reactor.callLater(random.random() * 0.2, self.endpoint.send, p, packet))
 
             self.relayed_broadcasts.append(block1.block_id)
 
