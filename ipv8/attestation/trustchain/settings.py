@@ -30,3 +30,6 @@ class TrustChainSettings(object):
 
         # Ignore validation errors
         self.ignore_validation = False
+
+        # Id of the peer
+        self.my_id = 1

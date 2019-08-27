@@ -5,9 +5,12 @@ Every node has a chain and these chains intertwine by blocks shared by chains.
 """
 from __future__ import absolute_import
 
+import csv
 import logging
+import os
 import random
 import struct
+import time
 from binascii import hexlify, unhexlify
 from functools import wraps
 from threading import RLock
@@ -422,7 +425,14 @@ class TrustChainCommunity(Community):
 
     def update_notify(self, block):
         self.network.known_network.add_edge(block.public_key, block.link_public_key)
-        self.notify_listeners(block)
+        block_stat_file = os.path.join(os.environ['PROJECT_DIR'], 'output', 'leader_blocks_time_'
+                                            + str(self.settings.my_id) + '.csv')
+
+        with open(block_stat_file, "a") as t_file:
+            writer = csv.DictWriter(t_file, ['time', 'transaction', "seq_num", "link"])
+            writer.writerow({"time": time.time(), 'transaction': str(block.transaction),
+                             'seq_num': block.sequence_number, "link": block.link_sequence_number
+                             })
 
 
     def validate_persist_block(self, block):
