@@ -170,7 +170,7 @@ class TrustChainCommunity(Community):
             if len(next_peers) < res_fanout:
                 # There is not enough information to build paths - choose at random
                 for peer in random.sample(self.get_peers(), min(len(self.get_peers()),
-                                                                           res_fanout)):
+                                                                res_fanout)):
                     next_peers.add(peer.public_key.key_to_bin())
             if len(next_peers) > res_fanout:
                 next_peers = random.sample(list(next_peers), res_fanout)
@@ -185,7 +185,9 @@ class TrustChainCommunity(Community):
             for peer_key in next_peers:
                 peer = self.network.get_verified_by_public_key_bin(peer_key)
                 self.logger.debug("Sending block to %s", peer)
-                reactor.callLater(0.5 * random.random(), self.endpoint.send, peer.address, packet)
+                p = peer.address
+                self.register_anonymous_task("informed_send_block",
+                                             reactor.callLater(random.random() * 1.0, self.endpoint.send, p, packet))
 
             self.relayed_broadcasts.append(block.block_id)
 
@@ -208,12 +210,11 @@ class TrustChainCommunity(Community):
             payload = HalfBlockBroadcastPayload.from_half_block(block, ttl).to_pack_list()
             packet = self._ez_pack(self._prefix, 5, [dist, payload], False)
 
-            peers = [p.address for p in random.sample(self.get_peers(), min(len(self.get_peers()),
-                                                                            self.settings.broadcast_fanout))]
-            ind = 1
+            peers = (p.address for p in random.sample(self.get_peers(), min(len(self.get_peers()),
+                                                                            self.settings.broadcast_fanout)))
             for p in peers:
-                reactor.callLater(0.5 * random.random(), self.endpoint.send, p, packet)
-                ind += 1
+                self.register_anonymous_task("send_block",
+                                             reactor.callLater(random.random() * 1.0, self.endpoint.send, p, packet))
 
             self.relayed_broadcasts.append(block.block_id)
 
@@ -234,12 +235,11 @@ class TrustChainCommunity(Community):
             payload = HalfBlockPairBroadcastPayload.from_half_blocks(block1, block2, ttl).to_pack_list()
             packet = self._ez_pack(self._prefix, 6, [dist, payload], False)
 
-            peers = [p.address for p in random.sample(self.get_peers(), min(len(self.get_peers()),
-                                                                            self.settings.broadcast_fanout))]
-            ind = 1
+            peers = (p.address for p in random.sample(self.get_peers(), min(len(self.get_peers()),
+                                                                            self.settings.broadcast_fanout)))
             for p in peers:
-                reactor.callLater(0.05 * ind, self.endpoint.send, p, packet)
-                ind += 1
+                self.register_anonymous_task("send_block_pair",
+                                             reactor.callLater(random.random() * 1.0, self.endpoint.send, p, packet))
 
             self.relayed_broadcasts.append(block1.block_id)
 
@@ -382,12 +382,12 @@ class TrustChainCommunity(Community):
         payload.ttl -= 1
         block = self.get_block_class(payload.type).from_payload(payload, self.serializer)
         self.update_notify(block)
-        #self.validate_persist_block(block)
+        # self.validate_persist_block(block)
 
         if block.block_id not in self.relayed_broadcasts and payload.ttl > 0:
             if self.settings.use_informed_broadcast:
                 fanout = self.settings.broadcast_fanout - 1
-                self.informed_send_block( block, ttl=payload.ttl, fanout=fanout)
+                self.informed_send_block(block, ttl=payload.ttl, fanout=fanout)
             else:
                 reactor.callLater(0.5 * random.random(), self.send_block, block, ttl=payload.ttl)
 
@@ -400,8 +400,8 @@ class TrustChainCommunity(Community):
         block1, block2 = self.get_block_class(payload.type1).from_pair_payload(payload, self.serializer)
         self.update_notify(block1)
         self.update_notify(block2)
-        #self.validate_persist_block(block1)
-        #self.validate_persist_block(block2)
+        # self.validate_persist_block(block1)
+        # self.validate_persist_block(block2)
 
     @synchronized
     @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, HalfBlockPairBroadcastPayload)
@@ -413,27 +413,26 @@ class TrustChainCommunity(Community):
         block1, block2 = self.get_block_class(payload.type1).from_pair_payload(payload, self.serializer)
         self.update_notify(block1)
         self.update_notify(block2)
-        #self.validate_persist_block(block1)
-        #self.validate_persist_block(block2)
+        # self.validate_persist_block(block1)
+        # self.validate_persist_block(block2)
 
         if block1.block_id not in self.relayed_broadcasts and payload.ttl > 0:
             if self.settings.use_informed_broadcast:
                 fanout = self.settings.broadcast_fanout - 1
-                self.informed_send_block( block1, block2, ttl=payload.ttl, fanout=fanout)
+                self.informed_send_block(block1, block2, ttl=payload.ttl, fanout=fanout)
             else:
                 reactor.callLater(0.5 * random.random(), self.send_block_pair, block1, block2, ttl=payload.ttl)
 
     def update_notify(self, block):
         self.network.known_network.add_edge(block.public_key, block.link_public_key)
         block_stat_file = os.path.join(os.environ['PROJECT_DIR'], 'output', 'leader_blocks_time_'
-                                            + str(self.settings.my_id) + '.csv')
+                                       + str(self.settings.my_id) + '.csv')
 
         with open(block_stat_file, "a") as t_file:
             writer = csv.DictWriter(t_file, ['time', 'transaction', "seq_num", "link"])
             writer.writerow({"time": time.time(), 'transaction': str(block.transaction),
                              'seq_num': block.sequence_number, "link": block.link_sequence_number
                              })
-
 
     def validate_persist_block(self, block):
         """
@@ -471,12 +470,10 @@ class TrustChainCommunity(Community):
         """
         Process a received half block.
         """
-        #validation = self.validate_persist_block(blk)
-        #self.logger.info("Block validation result %s, %s, (%s)", validation[0], validation[1], blk)
-        #if not self.settings.ignore_validation and validation[0] == ValidationResult.invalid:
+        # validation = self.validate_persist_block(blk)
+        # self.logger.info("Block validation result %s, %s, (%s)", validation[0], validation[1], blk)
+        # if not self.settings.ignore_validation and validation[0] == ValidationResult.invalid:
         #    return fail(RuntimeError("Block could not be validated: %s, %s" % (validation[0], validation[1])))
-
-
 
         # Check if we are waiting for this signature response
         self.update_notify(blk)
@@ -517,10 +514,11 @@ class TrustChainCommunity(Community):
                                                              for_half_block=blk)
                     return addCallback(crawl_deferred, lambda _: self.process_half_block(blk, peer))
             else:'''
+
         return self.sign_block(peer, linked=blk)
 
         # determine if we want to sign this block
-        #return addCallback(self.should_sign(blk), on_should_sign_outcome)
+        # return addCallback(self.should_sign(blk), on_should_sign_outcome)
 
     def crawl_chain(self, peer, latest_block_num=0):
         """
