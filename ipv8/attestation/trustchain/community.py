@@ -305,7 +305,7 @@ class TrustChainCommunity(Community):
         assert transaction is None or isinstance(transaction, dict), "Transaction should be a dictionary"
         assert additional_info is None or isinstance(additional_info, dict), "Additional info should be a dictionary"
 
-        #self.persistence_integrity_check()
+        # self.persistence_integrity_check()
 
         if linked and linked.link_public_key != ANY_COUNTERPARTY_PK:
             block_type = linked.type
@@ -316,7 +316,7 @@ class TrustChainCommunity(Community):
                                                         link_pk=public_key, double_spend_seq=double_spend_block)
         block.sign(self.my_peer.key)
 
-        #validation = block.validate(self.persistence)
+        # validation = block.validate(self.persistence)
         '''
         self.logger.info("Signed block to %s (%s) validation result %s",
                          hexlify(block.link_public_key)[-8:], block, validation)
