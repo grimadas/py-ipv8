@@ -19,6 +19,9 @@ from twisted.internet import reactor
 from twisted.internet.defer import Deferred, fail, inlineCallbacks, maybeDeferred, returnValue, succeed
 from twisted.internet.task import LoopingCall
 
+from ipv8.messaging.anonymization.pex import PexEndpointAdapter, PexCommunity
+from ipv8.peerdiscovery.discovery import RandomWalk
+from ipv8.peerdiscovery.network import Network
 from .block import ANY_COUNTERPARTY_PK, EMPTY_PK, GENESIS_SEQ, TrustChainBlock, UNKNOWN_SEQ, ValidationResult
 from .caches import ChainCrawlCache, CrawlRequestCache, HalfBlockSignCache, IntroCrawlTimeout
 from .database import TrustChainDB
@@ -61,6 +64,8 @@ class TrustChainCommunity(Community):
         working_directory = kwargs.pop('working_directory', '')
         db_name = kwargs.pop('db_name', self.DB_NAME)
         self.settings = kwargs.pop('settings', TrustChainSettings())
+        self.ipv8 = kwargs.pop('ipv8', None)
+        self.pex = {}
         self.receive_block_lock = RLock()
         super(TrustChainCommunity, self).__init__(*args, **kwargs)
         self.request_cache = RequestCache()
@@ -126,6 +131,13 @@ class TrustChainCommunity(Community):
         Return whether we should sign the block in the passed message.
         @param block: the block we want to sign or not.
         """
+        if block.type == b'spend':
+            # verify if my peer can claim this spend
+            total_spends = sum(self.persistence.get_spend_set(block.public_key).values())
+            total_claims = sum(self.persistence.get_claim_set(block.public_key).values())
+            if total_claims - total_spends > 0:
+                returnValue(True)
+
         if block.type not in self.listeners_map:
             returnValue(False)  # There are no listeners for this block
 
@@ -219,7 +231,7 @@ class TrustChainCommunity(Community):
 
             self.relayed_broadcasts.append(block.block_id)
 
-    def send_block_pair(self, block1, block2, address=None, ttl=1):
+    def send_block_pair(self, block1, block2, address=None, address_set=None, ttl=1):
         """
         Send a half block pair to a specific address, or do a broadcast to known peers if no peer is specified.
         """
@@ -232,16 +244,19 @@ class TrustChainCommunity(Community):
             packet = self._ez_pack(self._prefix, 4, [dist, payload], False)
             self.endpoint.send(address, packet)
         else:
-            self.logger.debug("Broadcasting blocks %s and %s", block1, block2)
+
             payload = HalfBlockPairBroadcastPayload.from_half_blocks(block1, block2, ttl).to_pack_list()
             packet = self._ez_pack(self._prefix, 6, [dist, payload], False)
-
-            peers = (p.address for p in random.sample(self.get_peers(), min(len(self.get_peers()),
-                                                                            self.settings.broadcast_fanout)))
+            if address_set:
+                self.logger.debug("Broadcasting block in back-channel %s and %s", block1, block2)
+                peers = address_set
+            else:
+                self.logger.debug("Broadcasting block in main-channel %s and %s", block1, block2)
+                peers = (p.address for p in random.sample(self.get_peers(), min(len(self.get_peers()),
+                                                                                self.settings.broadcast_fanout)))
             for p in peers:
                 self.register_anonymous_task("send_block_pair",
                                              reactor.callLater(random.random() * 0.2, self.endpoint.send, p, packet))
-
             self.relayed_broadcasts.append(block1.block_id)
 
     def self_sign_block(self, block_type=b'unknown', transaction=None):
@@ -360,11 +375,12 @@ class TrustChainCommunity(Community):
             return succeed((block, None))
         else:
             # We return a deferred that fires immediately with both half blocks.
-            if block.type not in self.settings.block_types_bc_disabled:
-                if self.settings.use_informed_broadcast:
-                    self.informed_send_block(linked, block)
-                else:
-                    self.send_block_pair(linked, block)
+            if block.link_public_key not in self.pex.keys():
+                self.send_block_pair(linked, block)
+            else:
+                val = self.pex[block.link_public_key].get_peers()
+                self.send_block_pair(linked, block, address_set=val)
+                self.send_block_pair(linked, block)
             return succeed((linked, block))
 
     @synchronized
@@ -501,6 +517,8 @@ class TrustChainCommunity(Community):
                 self.logger.info("Not signing block %s", blk)
                 return succeed(None)
 
+            return self.sign_block(peer, linked=blk, block_type=b"claim")
+
             # It is important that the request matches up with its previous block, gaps cannot be tolerated at
             # this point. We already dropped invalids, so here we delay this message if the result is partial,
             # partial_previous or no-info. We send a crawl request to the requester to (hopefully) close the gap
@@ -517,8 +535,6 @@ class TrustChainCommunity(Community):
                                                              max(GENESIS_SEQ, blk.sequence_number - 1),
                                                              for_half_block=blk)
                     return addCallback(crawl_deferred, lambda _: self.process_half_block(blk, peer))
-            else:
-                return self.sign_block(peer, linked=blk)
 
         # determine if we want to sign this block
         return addCallback(self.should_sign(blk), on_should_sign_outcome)
@@ -773,6 +789,16 @@ class TrustChainCommunity(Community):
 
         if peer.address in self.network.blacklist:  # Do not crawl addresses in our blacklist (trackers)
             return
+
+        if not self.ipv8:
+            self.logger.error('No IPv8 service object available, cannot start PEXCommunity')
+        elif peer.mid not in self.pex:
+            pex_ep_adapter = PexEndpointAdapter(self.ipv8.endpoint)
+            community = PexCommunity(self.my_peer, pex_ep_adapter, Network(), info_hash=peer.mid)
+            self.ipv8.overlays.append(community)
+            # Discover and connect to everyone for 50 seconds
+            self.ipv8.strategies.append((RandomWalk(community, total_run=50), -1))
+            self.pex[peer.mid] = community
 
         # Check if we have pending crawl requests for this peer
         has_intro_crawl = self.request_cache.has(u"introcrawltimeout", IntroCrawlTimeout.get_number_for(peer))
