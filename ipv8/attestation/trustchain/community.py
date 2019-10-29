@@ -135,8 +135,8 @@ class TrustChainCommunity(Community):
             # verify if my peer can claim this spend
             total_spends = sum(self.persistence.get_spend_set(block.public_key).values())
             total_claims = sum(self.persistence.get_claim_set(block.public_key).values())
-            if total_claims - total_spends > 0:
-                returnValue(True)
+            #if total_claims - total_spends > 0:
+            returnValue(True)
 
         if block.type not in self.listeners_map:
             returnValue(False)  # There are no listeners for this block
