@@ -344,7 +344,7 @@ class TrustChainCommunity(Community):
         if not self.persistence.contains(block):
             self.persistence.add_block(block)
             self.update_notify(block)
-            # self.notify_listeners(block)
+            self.notify_listeners(block)
 
         # This is a source block with no counterparty
         if not peer and public_key == ANY_COUNTERPARTY_PK:
@@ -374,13 +374,14 @@ class TrustChainCommunity(Community):
                 return sign_deferred
             return succeed((block, None))
         else:
-            self.logger.info("Signing a linked block %s, %s", block, linked)
             # We return a deferred that fires immediately with both half blocks.
-            if block.link_public_key not in self.pex.keys():
+            if peer.mid not in self.pex.keys():
+                self.logger.info("Signing a linked block, pex not in keys")
                 self.send_block_pair(linked, block)
             else:
+                self.logger.info("Signing a linked block, pex is in keys")
                 self.send_block_pair(linked, block)
-                val = self.pex[block.link_public_key].get_peers()
+                val = self.pex[peer.mid].get_peers()
                 self.send_block_pair(linked, block, address_set=val)
 
             return succeed((linked, block))
