@@ -809,6 +809,10 @@ class TrustChainCommunity(Community):
             self.pex[peer.mid] = community
             self.pex_map[peer.mid] = index
 
+        # PEX announce
+        if peer.mid in self.pex:
+            self.pex[peer.mid].start_announce(peer.public_key)
+
         # Check if we have pending crawl requests for this peer
         has_intro_crawl = self.request_cache.has(u"introcrawltimeout", IntroCrawlTimeout.get_number_for(peer))
         has_chain_crawl = self.request_cache.has(u"chaincrawl", ChainCrawlCache.get_number_for(peer))
