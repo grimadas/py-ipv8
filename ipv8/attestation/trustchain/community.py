@@ -239,7 +239,7 @@ class TrustChainCommunity(Community):
         dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
 
         if address:
-            self.logger.debug("Sending block pair to (%s:%d) (%s and %s)", address[0], address[1], block1, block2)
+            self.logger.info("Sending block pair to (%s:%d) (%s and %s)", address[0], address[1], block1, block2)
             payload = HalfBlockPairPayload.from_half_blocks(block1, block2).to_pack_list()
             packet = self._ez_pack(self._prefix, 4, [dist, payload], False)
             self.endpoint.send(address, packet)
@@ -248,10 +248,10 @@ class TrustChainCommunity(Community):
             payload = HalfBlockPairBroadcastPayload.from_half_blocks(block1, block2, ttl).to_pack_list()
             packet = self._ez_pack(self._prefix, 6, [dist, payload], False)
             if address_set:
-                self.logger.debug("Broadcasting block in back-channel %s and %s", block1, block2)
+                self.logger.info("Broadcasting block in back-channel %s and %s", block1, block2)
                 peers = address_set
             else:
-                self.logger.debug("Broadcasting block in main-channel %s and %s", block1, block2)
+                self.logger.info("Broadcasting block in main-channel %s and %s", block1, block2)
                 peers = (p.address for p in random.sample(self.get_peers(), min(len(self.get_peers()),
                                                                                 self.settings.broadcast_fanout)))
             for p in peers:
@@ -379,9 +379,10 @@ class TrustChainCommunity(Community):
             if block.link_public_key not in self.pex.keys():
                 self.send_block_pair(linked, block)
             else:
+                self.send_block_pair(linked, block)
                 val = self.pex[block.link_public_key].get_peers()
                 self.send_block_pair(linked, block, address_set=val)
-                self.send_block_pair(linked, block)
+
             return succeed((linked, block))
 
     @synchronized
@@ -520,7 +521,7 @@ class TrustChainCommunity(Community):
                 self.logger.info("Not signing block %s", blk)
                 return succeed(None)
 
-            return self.sign_block(peer, linked=blk, block_type=b"claim")
+            return self.sign_block(peer, linked=blk)
 
             # It is important that the request matches up with its previous block, gaps cannot be tolerated at
             # this point. We already dropped invalids, so here we delay this message if the result is partial,
