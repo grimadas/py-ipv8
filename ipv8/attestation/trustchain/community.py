@@ -265,7 +265,7 @@ class TrustChainCommunity(Community):
             packet = self._ez_pack(self._prefix, 6, [dist, payload], False)
             if address_set:
                 self.logger.info("Broadcasting block in back-channel %s and %s", block1, block2)
-                peers = address_set
+                peers = (p.address for p in address_set)
             else:
                 self.logger.info("Broadcasting block in main-channel %s and %s", block1, block2)
                 peers = (p.address for p in random.sample(self.get_peers(), min(len(self.get_peers()),
