@@ -374,6 +374,7 @@ class TrustChainCommunity(Community):
                 return sign_deferred
             return succeed((block, None))
         else:
+            self.logger.info("Signing a linked block %s, %s", block, linked)
             # We return a deferred that fires immediately with both half blocks.
             if block.link_public_key not in self.pex.keys():
                 self.send_block_pair(linked, block)
