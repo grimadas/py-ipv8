@@ -66,6 +66,7 @@ class TrustChainCommunity(Community):
         self.settings = kwargs.pop('settings', TrustChainSettings())
         self.ipv8 = kwargs.pop('ipv8', None)
         self.pex = {}
+        self.pex_map = {}
         self.receive_block_lock = RLock()
         super(TrustChainCommunity, self).__init__(*args, **kwargs)
         self.request_cache = RequestCache()
@@ -381,7 +382,8 @@ class TrustChainCommunity(Community):
             else:
                 self.logger.info("Signing a linked block, pex is in keys")
                 self.send_block_pair(linked, block)
-                val = self.pex[peer.mid].get_peers()
+                val = self.ipv8.overlays[self.pex_map[peer.mid]].get_peers()
+                self.logger.info("Number of peers in back overlay is %s, %s", val is None, len(val))
                 self.send_block_pair(linked, block, address_set=val)
 
             return succeed((linked, block))
@@ -800,10 +802,12 @@ class TrustChainCommunity(Community):
         elif peer.mid not in self.pex:
             pex_ep_adapter = PexEndpointAdapter(self.ipv8.endpoint)
             community = PexCommunity(self.my_peer, pex_ep_adapter, Network(), info_hash=peer.mid)
+            index = len(self.ipv8.overlays)
             self.ipv8.overlays.append(community)
             # Discover and connect to everyone for 50 seconds
             self.ipv8.strategies.append((RandomWalk(community, total_run=50), -1))
             self.pex[peer.mid] = community
+            self.pex_map[peer.mid] = index
 
         # Check if we have pending crawl requests for this peer
         has_intro_crawl = self.request_cache.has(u"introcrawltimeout", IntroCrawlTimeout.get_number_for(peer))
