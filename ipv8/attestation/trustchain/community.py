@@ -48,6 +48,19 @@ def synchronized(f):
     return wrapper
 
 
+class TrustPeer(object):
+    def __init__(self, mid):
+        self.mid = mid
+
+
+class SubTrustCommunity(Community):
+
+    def __init__(self, *args, **kwargs):
+        self.master_peer = TrustPeer(kwargs.pop('mid'))
+        self._prefix = b'\x00' + self.version + self.master_peer.mid
+        super(SubTrustCommunity, self).__init__(*args, **kwargs)
+
+
 class TrustChainCommunity(Community):
     """
     Community for reputation based on TrustChain tamper proof interaction history.
@@ -800,18 +813,13 @@ class TrustChainCommunity(Community):
         if not self.ipv8:
             self.logger.error('No IPv8 service object available, cannot start PEXCommunity')
         elif peer.mid not in self.pex:
-            pex_ep_adapter = PexEndpointAdapter(self.ipv8.endpoint)
-            community = PexCommunity(self.my_peer, pex_ep_adapter, Network(), info_hash=peer.mid)
+            community = SubTrustCommunity(self.my_peer, self.ipv8.endpoint, Network(), mid=peer.mid)
             index = len(self.ipv8.overlays)
             self.ipv8.overlays.append(community)
             # Discover and connect to everyone for 50 seconds
-            self.ipv8.strategies.append((RandomWalk(community, total_run=50), -1))
+            self.ipv8.strategies.append((RandomWalk(community), -1))
             self.pex[peer.mid] = community
             self.pex_map[peer.mid] = index
-
-        # PEX announce
-        if peer.mid in self.pex:
-            self.pex[peer.mid].start_announce(peer.public_key)
 
         # Check if we have pending crawl requests for this peer
         has_intro_crawl = self.request_cache.has(u"introcrawltimeout", IntroCrawlTimeout.get_number_for(peer))
