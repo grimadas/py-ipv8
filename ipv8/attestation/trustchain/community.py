@@ -823,6 +823,7 @@ class TrustChainCommunity(Community):
             self.pex[peer.mid] = community
             self.pex_map[peer.mid] = index
             if self.bootstrap_master:
+                self.logger.info('Proceed with a bootstrap master')
                 community.walk_to(self.bootstrap_master)
 
         # Check if we have pending crawl requests for this peer
