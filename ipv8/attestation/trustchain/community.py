@@ -418,10 +418,12 @@ class TrustChainCommunity(Community):
         We received a block pair message.
         """
         block1, block2 = self.get_block_class(payload.type1).from_pair_payload(payload, self.serializer)
+        self.logger.info("Received block pair %s, %s", block1, block2)
         self.update_notify(block1)
         self.update_notify(block2)
-        # self.validate_persist_block(block1)
-        # self.validate_persist_block(block2)
+
+        self.validate_persist_block(block1)
+        self.validate_persist_block(block2)
 
     @synchronized
     @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, HalfBlockPairBroadcastPayload)
