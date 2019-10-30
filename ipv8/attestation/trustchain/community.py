@@ -359,7 +359,7 @@ class TrustChainCommunity(Community):
 
         if not self.persistence.contains(block):
             self.persistence.add_block(block)
-            self.update_notify(block)
+            # self.update_notify(block)
             self.notify_listeners(block)
 
         # This is a source block with no counterparty
@@ -421,8 +421,8 @@ class TrustChainCommunity(Community):
         """
         payload.ttl -= 1
         block = self.get_block_class(payload.type).from_payload(payload, self.serializer)
-        self.update_notify(block)
-        # self.validate_persist_block(block)
+        # self.update_notify(block)
+        self.validate_persist_block(block)
 
         if block.block_id not in self.relayed_broadcasts and payload.ttl > 0:
             if self.settings.use_informed_broadcast:
@@ -439,8 +439,10 @@ class TrustChainCommunity(Community):
         """
         block1, block2 = self.get_block_class(payload.type1).from_pair_payload(payload, self.serializer)
         self.logger.info("Received block pair %s, %s", block1, block2)
-        self.update_notify(block1)
-        self.update_notify(block2)
+        # self.notify_listeners(block1)
+        # self.notify_listeners(block2)
+        # self.update_notify(block1)
+        # self.update_notify(block2)
 
         self.validate_persist_block(block1)
         self.validate_persist_block(block2)
@@ -453,10 +455,10 @@ class TrustChainCommunity(Community):
         """
         payload.ttl -= 1
         block1, block2 = self.get_block_class(payload.type1).from_pair_payload(payload, self.serializer)
-        self.update_notify(block1)
-        self.update_notify(block2)
-        # self.validate_persist_block(block1)
-        # self.validate_persist_block(block2)
+        # self.update_notify(block1)
+        # self.update_notify(block2)
+        self.validate_persist_block(block1)
+        self.validate_persist_block(block2)
 
         if block1.block_id not in self.relayed_broadcasts and payload.ttl > 0:
             if self.settings.use_informed_broadcast:
@@ -518,7 +520,7 @@ class TrustChainCommunity(Community):
             return fail(RuntimeError("Block could not be validated: %s, %s" % (validation[0], validation[1])))
 
         # Check if we are waiting for this signature response
-        self.update_notify(blk)
+        # self.update_notify(blk)
         link_block_id_int = int(hexlify(blk.linked_block_id), 16) % 100000000
         if self.request_cache.has(u'sign', link_block_id_int):
             cache = self.request_cache.pop(u'sign', link_block_id_int)
