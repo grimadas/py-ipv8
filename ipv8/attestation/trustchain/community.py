@@ -19,7 +19,6 @@ from twisted.internet import reactor
 from twisted.internet.defer import Deferred, fail, inlineCallbacks, maybeDeferred, returnValue, succeed
 from twisted.internet.task import LoopingCall
 
-from ipv8.messaging.anonymization.pex import PexEndpointAdapter, PexCommunity
 from ipv8.peerdiscovery.discovery import RandomWalk
 from ipv8.peerdiscovery.network import Network
 from .block import ANY_COUNTERPARTY_PK, EMPTY_PK, GENESIS_SEQ, TrustChainBlock, UNKNOWN_SEQ, ValidationResult
@@ -77,9 +76,6 @@ class TrustChainCommunity(Community):
         working_directory = kwargs.pop('working_directory', '')
         db_name = kwargs.pop('db_name', self.DB_NAME)
         self.settings = kwargs.pop('settings', TrustChainSettings())
-        self.ipv8 = kwargs.pop('ipv8', None)
-        self.pex = {}
-        self.pex_map = {}
         self.receive_block_lock = RLock()
         super(TrustChainCommunity, self).__init__(*args, **kwargs)
         self.request_cache = RequestCache()
@@ -93,6 +89,12 @@ class TrustChainCommunity(Community):
         self.db_cleanup_lc = self.register_task("db_cleanup", LoopingCall(self.do_db_cleanup))
         self.db_cleanup_lc.start(600)
         self.known_graph = {}
+
+        # Trustchain SubCommunities
+        self.ipv8 = kwargs.pop('ipv8', None)
+        self.pex = {}
+        self.pex_map = {}
+        self.bootstrap_master = None
 
         self.decode_map.update({
             chr(1): self.received_half_block,
@@ -820,6 +822,8 @@ class TrustChainCommunity(Community):
             self.ipv8.strategies.append((RandomWalk(community), -1))
             self.pex[peer.mid] = community
             self.pex_map[peer.mid] = index
+            if self.bootstrap_master:
+                community.walk_to(self.bootstrap_master)
 
         # Check if we have pending crawl requests for this peer
         has_intro_crawl = self.request_cache.has(u"introcrawltimeout", IntroCrawlTimeout.get_number_for(peer))
