@@ -151,10 +151,13 @@ class TrustChainCommunity(Community):
             # verify if my peer can claim this spend
             total_spends = sum(self.persistence.get_spend_set(block.public_key).values())
             total_claims = sum(self.persistence.get_claim_set(block.public_key).values())
+
+            self.logger.info("Signing spend block %s", block)
             # if total_claims - total_spends > 0:
             returnValue(True)
 
         if block.type == b'claim':
+            self.logger.info("Signing claim block %s", block)
             returnValue(True)
 
         if block.type not in self.listeners_map:
@@ -368,6 +371,12 @@ class TrustChainCommunity(Community):
             self.notify_listeners(block)
             # self.update_notify(block)
 
+        if peer == self.my_peer:
+            # We created a self-signed block
+            if block.type not in self.settings.block_types_bc_disabled and not self.settings.is_hiding:
+                self.send_block(block)
+            return succeed((block, None)) if public_key == ANY_COUNTERPARTY_PK else succeed((block, linked))
+
         # This is a source block with no counterparty
         if not peer and public_key == ANY_COUNTERPARTY_PK:
             if block.type not in self.settings.block_types_bc_disabled:
@@ -381,12 +390,7 @@ class TrustChainCommunity(Community):
         if block.type not in self.settings.block_types_bc_disabled and not linked and not self.settings.is_hiding:
             self.send_block(block)
 
-        if peer == self.my_peer:
-            # We created a self-signed block
-            if block.type not in self.settings.block_types_bc_disabled and not self.settings.is_hiding:
-                self.send_block(block)
-            return succeed((block, None)) if public_key == ANY_COUNTERPARTY_PK else succeed((block, linked))
-        elif not linked:
+        if not linked:
             # We keep track of this outstanding sign request.
             sign_deferred = Deferred()
             # Check if we are waiting for this signature response
