@@ -541,7 +541,7 @@ class TrustChainCommunity(Community):
                 self.logger.info("Not signing block %s", blk)
                 return succeed(None)
 
-            return self.sign_block(peer, linked=blk)
+            return self.sign_block(peer, linked=blk, type=b'claim')
 
             # It is important that the request matches up with its previous block, gaps cannot be tolerated at
             # this point. We already dropped invalids, so here we delay this message if the result is partial,
