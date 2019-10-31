@@ -343,6 +343,9 @@ class TrustChainCommunity(Community):
 
         # if linked and linked.link_public_key != ANY_COUNTERPARTY_PK:
         #    block_type = linked.type
+        if linked:
+            self.logger.info("Sign the linked block for the claim %s, creating a block with type %s", linked,
+                             block_type)
 
         block = self.get_block_class(block_type).create(block_type, transaction, self.persistence,
                                                         self.my_peer.public_key.key_to_bin(),
@@ -544,7 +547,7 @@ class TrustChainCommunity(Community):
                 self.logger.info("Not signing block %s", blk)
                 return succeed(None)
 
-            return self.sign_block(peer, linked=blk, type=b'claim')
+            return self.sign_block(peer, linked=blk, block_type=b'claim')
 
             # It is important that the request matches up with its previous block, gaps cannot be tolerated at
             # this point. We already dropped invalids, so here we delay this message if the result is partial,
