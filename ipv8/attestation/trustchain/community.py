@@ -151,7 +151,10 @@ class TrustChainCommunity(Community):
             # verify if my peer can claim this spend
             total_spends = sum(self.persistence.get_spend_set(block.public_key).values())
             total_claims = sum(self.persistence.get_claim_set(block.public_key).values())
-            #if total_claims - total_spends > 0:
+            # if total_claims - total_spends > 0:
+            returnValue(True)
+
+        if block.type == b'claim':
             returnValue(True)
 
         if block.type not in self.listeners_map:
@@ -338,7 +341,7 @@ class TrustChainCommunity(Community):
 
         # self.persistence_integrity_check()
 
-        #if linked and linked.link_public_key != ANY_COUNTERPARTY_PK:
+        # if linked and linked.link_public_key != ANY_COUNTERPARTY_PK:
         #    block_type = linked.type
 
         block = self.get_block_class(block_type).create(block_type, transaction, self.persistence,
@@ -541,7 +544,7 @@ class TrustChainCommunity(Community):
                 self.logger.info("Not signing block %s", blk)
                 return succeed(None)
 
-            return self.sign_block(peer, linked=blk)
+            return self.sign_block(peer, linked=blk, type=b'claim')
 
             # It is important that the request matches up with its previous block, gaps cannot be tolerated at
             # this point. We already dropped invalids, so here we delay this message if the result is partial,
