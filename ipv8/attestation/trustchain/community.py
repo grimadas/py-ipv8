@@ -338,8 +338,8 @@ class TrustChainCommunity(Community):
 
         # self.persistence_integrity_check()
 
-        if linked and linked.link_public_key != ANY_COUNTERPARTY_PK:
-            block_type = linked.type
+        #if linked and linked.link_public_key != ANY_COUNTERPARTY_PK:
+        #    block_type = linked.type
 
         block = self.get_block_class(block_type).create(block_type, transaction, self.persistence,
                                                         self.my_peer.public_key.key_to_bin(),
@@ -359,8 +359,8 @@ class TrustChainCommunity(Community):
 
         if not self.persistence.contains(block):
             self.persistence.add_block(block)
-            # self.update_notify(block)
             self.notify_listeners(block)
+            # self.update_notify(block)
 
         # This is a source block with no counterparty
         if not peer and public_key == ANY_COUNTERPARTY_PK:
