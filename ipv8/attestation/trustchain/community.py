@@ -241,12 +241,11 @@ class TrustChainCommunity(Community):
             packet = self._ez_pack(self._prefix, 1, [dist, payload], False)
             self.endpoint.send(address, packet)
         else:
-            self.logger.debug("Broadcasting block %s", block)
             payload = HalfBlockBroadcastPayload.from_half_block(block, ttl).to_pack_list()
             packet = self._ez_pack(self._prefix, 5, [dist, payload], False)
-
-            peers = (p.address for p in random.sample(self.get_peers(), min(len(self.get_peers()),
-                                                                            self.settings.broadcast_fanout)))
+            f = min(len(self.get_peers()), self.settings.broadcast_fanout)
+            self.logger.debug("Broadcasting block to %s peers", f)
+            peers = (p.address for p in random.sample(self.get_peers(), f))
             for p in peers:
                 self.register_anonymous_task("send_block",
                                              reactor.callLater(random.random() * 0.1, self.endpoint.send, p, packet))
@@ -270,13 +269,14 @@ class TrustChainCommunity(Community):
             payload = HalfBlockPairBroadcastPayload.from_half_blocks(block1, block2, ttl).to_pack_list()
             packet = self._ez_pack(self._prefix, 6, [dist, payload], False)
             if address_set:
-                self.logger.info("Broadcasting block in back-channel %s and %s", block1, block2)
-                peers = (p.address for p in random.sample(address_set, min(len(address_set),
-                                                                           self.settings.broadcast_fanout)))
+                f = min(len(address_set), self.settings.broadcast_fanout)
+                self.logger.debug("Broadcasting block pair in a back-channel  to %s peers", f)
+                peers = (p.address for p in random.sample(address_set, f))
             else:
-                self.logger.info("Broadcasting block in main-channel %s and %s", block1, block2)
-                peers = (p.address for p in random.sample(self.get_peers(), min(len(self.get_peers()),
-                                                                                self.settings.broadcast_fanout)))
+                f = min(len(self.get_peers()), self.settings.broadcast_fanout)
+                self.logger.debug("Broadcasting block pair in a main-channel  to %s peers", f)
+                peers = (p.address for p in random.sample(self.get_peers(), f))
+
             for p in peers:
                 self.register_anonymous_task("send_block_pair",
                                              reactor.callLater(random.random() * 0.1, self.endpoint.send, p, packet))
