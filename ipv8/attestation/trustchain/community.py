@@ -311,7 +311,7 @@ class TrustChainCommunity(Community):
         return self.sign_block(self.my_peer, linked=source, public_key=public_key, block_type=block_type,
                                additional_info=additional_info)
 
-    @synchronized
+
     def sign_block(self, peer, public_key=EMPTY_PK, block_type=b'unknown', transaction=None, linked=None,
                    additional_info=None, double_spend_block=None):
         """
@@ -414,7 +414,7 @@ class TrustChainCommunity(Community):
 
             return succeed((linked, block))
 
-    @synchronized
+
     @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, HalfBlockPayload)
     def received_half_block(self, source_address, dist, payload):
         """
@@ -424,7 +424,7 @@ class TrustChainCommunity(Community):
         block = self.get_block_class(payload.type).from_payload(payload, self.serializer)
         self.process_half_block(block, peer).addErrback(lambda _: None)
 
-    @synchronized
+
     @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, HalfBlockBroadcastPayload)
     def received_half_block_broadcast(self, source_address, dist, payload):
         """
@@ -442,7 +442,7 @@ class TrustChainCommunity(Community):
             else:
                 reactor.callLater(0.5 * random.random(), self.send_block, block, ttl=payload.ttl)
 
-    @synchronized
+
     @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, HalfBlockPairPayload)
     def received_half_block_pair(self, source_address, dist, payload):
         """
@@ -458,7 +458,7 @@ class TrustChainCommunity(Community):
         self.validate_persist_block(block1)
         self.validate_persist_block(block2)
 
-    @synchronized
+
     @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, HalfBlockPairBroadcastPayload)
     def received_half_block_pair_broadcast(self, source_address, dist, payload):
         """
