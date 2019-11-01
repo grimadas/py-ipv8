@@ -221,7 +221,7 @@ class TrustChainCommunity(Community):
                 self.logger.debug("Sending block to %s", peer)
                 p = peer.address
                 self.register_anonymous_task("informed_send_block",
-                                             reactor.callLater(random.random() * 0.2,
+                                             reactor.callLater(random.random() * 0.1,
                                                                self.endpoint.send, p, packet))
 
             self.relayed_broadcasts.append(block.block_id)
@@ -249,7 +249,7 @@ class TrustChainCommunity(Community):
                                                                             self.settings.broadcast_fanout)))
             for p in peers:
                 self.register_anonymous_task("send_block",
-                                             reactor.callLater(random.random() * 0.2, self.endpoint.send, p, packet))
+                                             reactor.callLater(random.random() * 0.1, self.endpoint.send, p, packet))
 
             self.relayed_broadcasts.append(block.block_id)
 
@@ -271,14 +271,15 @@ class TrustChainCommunity(Community):
             packet = self._ez_pack(self._prefix, 6, [dist, payload], False)
             if address_set:
                 self.logger.info("Broadcasting block in back-channel %s and %s", block1, block2)
-                peers = (p.address for p in address_set)
+                peers = (p.address for p in random.sample(address_set, min(len(address_set),
+                                                                           self.settings.broadcast_fanout)))
             else:
                 self.logger.info("Broadcasting block in main-channel %s and %s", block1, block2)
                 peers = (p.address for p in random.sample(self.get_peers(), min(len(self.get_peers()),
                                                                                 self.settings.broadcast_fanout)))
             for p in peers:
                 self.register_anonymous_task("send_block_pair",
-                                             reactor.callLater(random.random() * 0.2, self.endpoint.send, p, packet))
+                                             reactor.callLater(random.random() * 0.1, self.endpoint.send, p, packet))
             self.relayed_broadcasts.append(block1.block_id)
 
     def self_sign_block(self, block_type=b'unknown', transaction=None):
@@ -836,7 +837,8 @@ class TrustChainCommunity(Community):
             self.pex_map[peer.mid] = index
             if self.bootstrap_master:
                 self.logger.info('Proceed with a bootstrap master')
-                community.walk_to(self.bootstrap_master)
+                for k in self.bootstrap_master:
+                    community.walk_to(k)
 
         # Check if we have pending crawl requests for this peer
         has_intro_crawl = self.request_cache.has(u"introcrawltimeout", IntroCrawlTimeout.get_number_for(peer))
