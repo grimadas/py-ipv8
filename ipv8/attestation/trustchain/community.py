@@ -247,8 +247,9 @@ class TrustChainCommunity(Community):
             self.logger.debug("Broadcasting block to %s peers", f)
             peers = (p.address for p in random.sample(self.get_peers(), f))
             for p in peers:
-                self.register_anonymous_task("send_block",
-                                             reactor.callLater(random.random() * 0.1, self.endpoint.send, p, packet))
+                self.endpoint.send(p, packet)
+                #self.register_anonymous_task("send_block",
+                #                             reactor.callLater(random.random() * 0.1, self.endpoint.send, p, packet))
 
             self.relayed_broadcasts.append(block.block_id)
 
@@ -278,8 +279,9 @@ class TrustChainCommunity(Community):
                 peers = (p.address for p in random.sample(self.get_peers(), f))
 
             for p in peers:
-                self.register_anonymous_task("send_block_pair",
-                                             reactor.callLater(random.random() * 0.1, self.endpoint.send, p, packet))
+                self.endpoint.send(p, packet)
+                #self.register_anonymous_task("send_block_pair",
+                #                             reactor.callLater(random.random() * 0.1, self.endpoint.send, p, packet))
             self.relayed_broadcasts.append(block1.block_id)
 
     def self_sign_block(self, block_type=b'unknown', transaction=None):
@@ -388,8 +390,8 @@ class TrustChainCommunity(Community):
         self.send_block(block, address=peer.address)
 
         # We broadcast the block in the network if we initiated a transaction
-        if block.type not in self.settings.block_types_bc_disabled and not linked and not self.settings.is_hiding:
-            self.send_block(block)
+        # if block.type not in self.settings.block_types_bc_disabled and not linked and not self.settings.is_hiding:
+        #    self.send_block(block)
 
         if not linked:
             # We keep track of this outstanding sign request.
