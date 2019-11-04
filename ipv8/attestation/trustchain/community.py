@@ -248,7 +248,7 @@ class TrustChainCommunity(Community):
             peers = (p.address for p in random.sample(self.get_peers(), f))
             for p in peers:
                 self.endpoint.send(p, packet)
-                #self.register_anonymous_task("send_block",
+                # self.register_anonymous_task("send_block",
                 #                             reactor.callLater(random.random() * 0.2, self.endpoint.send, p, packet))
 
             self.relayed_broadcasts.append(block.block_id)
@@ -280,7 +280,7 @@ class TrustChainCommunity(Community):
 
             for p in peers:
                 self.endpoint.send(p, packet)
-                #self.register_anonymous_task("send_block_pair",
+                # self.register_anonymous_task("send_block_pair",
                 #                             reactor.callLater(random.random() * 0.2, self.endpoint.send, p, packet))
             self.relayed_broadcasts.append(block1.block_id)
 
@@ -312,7 +312,6 @@ class TrustChainCommunity(Community):
 
         return self.sign_block(self.my_peer, linked=source, public_key=public_key, block_type=block_type,
                                additional_info=additional_info)
-
 
     def sign_block(self, peer, public_key=EMPTY_PK, block_type=b'unknown', transaction=None, linked=None,
                    additional_info=None, double_spend_block=None):
@@ -403,6 +402,7 @@ class TrustChainCommunity(Community):
                 return sign_deferred
             return succeed((block, None))
         else:
+            return succeed((linked, block))
             # We return a deferred that fires immediately with both half blocks.
             if peer.mid not in self.pex.keys():
                 self.logger.info("Signing a linked block, pex not in keys")
@@ -414,9 +414,6 @@ class TrustChainCommunity(Community):
                 self.logger.info("Number of peers in back overlay is %s, %s", val is None, len(val))
                 self.send_block_pair(linked, block, address_set=val)
 
-            return succeed((linked, block))
-
-
     @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, HalfBlockPayload)
     def received_half_block(self, source_address, dist, payload):
         """
@@ -425,7 +422,6 @@ class TrustChainCommunity(Community):
         peer = Peer(payload.public_key, source_address)
         block = self.get_block_class(payload.type).from_payload(payload, self.serializer)
         self.process_half_block(block, peer).addErrback(lambda _: None)
-
 
     @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, HalfBlockBroadcastPayload)
     def received_half_block_broadcast(self, source_address, dist, payload):
@@ -444,7 +440,6 @@ class TrustChainCommunity(Community):
             else:
                 reactor.callLater(0.5 * random.random(), self.send_block, block, ttl=payload.ttl)
 
-
     @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, HalfBlockPairPayload)
     def received_half_block_pair(self, source_address, dist, payload):
         """
@@ -459,7 +454,6 @@ class TrustChainCommunity(Community):
 
         self.validate_persist_block(block1)
         self.validate_persist_block(block2)
-
 
     @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, HalfBlockPairBroadcastPayload)
     def received_half_block_pair_broadcast(self, source_address, dist, payload):
@@ -834,7 +828,7 @@ class TrustChainCommunity(Community):
             index = len(self.ipv8.overlays)
             self.ipv8.overlays.append(community)
             # Discover and connect to everyone for 50 seconds
-            #self.ipv8.strategies.append((RandomWalk(community), -1))
+            # self.ipv8.strategies.append((RandomWalk(community, total_run=50), -1))
             self.pex[peer.mid] = community
             self.pex_map[peer.mid] = index
             if self.bootstrap_master:
