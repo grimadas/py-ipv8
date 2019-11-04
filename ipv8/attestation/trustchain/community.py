@@ -834,7 +834,7 @@ class TrustChainCommunity(Community):
             index = len(self.ipv8.overlays)
             self.ipv8.overlays.append(community)
             # Discover and connect to everyone for 50 seconds
-            self.ipv8.strategies.append((RandomWalk(community), -1))
+            #self.ipv8.strategies.append((RandomWalk(community), -1))
             self.pex[peer.mid] = community
             self.pex_map[peer.mid] = index
             if self.bootstrap_master:
