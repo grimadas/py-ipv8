@@ -835,8 +835,8 @@ class TrustChainCommunity(Community):
             # Start sync task after the discovery
             self.periodic_sync_lc[peer.mid] = self.register_task("sync_"+str(peer.mid),
                                                                  LoopingCall(self.trustchain_sync, peer.mid),
-                                                                 delay=self.settings.intro_run)
-            self.periodic_sync_lc[peer.mid].start(self.settings.sync_time, now=False)
+                                                                 delay=self.settings.intro_run,
+                                                                 interval=self.settings.sync_time)
 
         # Check if we have pending crawl requests for this peer
         has_intro_crawl = self.request_cache.has(u"introcrawltimeout", IntroCrawlTimeout.get_number_for(peer))
