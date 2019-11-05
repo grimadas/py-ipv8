@@ -402,7 +402,6 @@ class TrustChainCommunity(Community):
                 return sign_deferred
             return succeed((block, None))
         else:
-            return succeed((linked, block))
             # We return a deferred that fires immediately with both half blocks.
             if peer.mid not in self.pex.keys():
                 self.logger.info("Signing a linked block, pex not in keys")
@@ -413,6 +412,7 @@ class TrustChainCommunity(Community):
                 val = self.ipv8.overlays[self.pex_map[peer.mid]].get_peers()
                 self.logger.info("Number of peers in back overlay is %s, %s", val is None, len(val))
                 self.send_block_pair(linked, block, address_set=val)
+            return succeed((linked, block))
 
     @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, HalfBlockPayload)
     def received_half_block(self, source_address, dist, payload):
