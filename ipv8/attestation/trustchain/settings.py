@@ -33,3 +33,9 @@ class TrustChainSettings(object):
 
         # Id of the peer
         self.my_id = 1
+        
+        # Sub-community introduction time in seconds 
+        self.intro_run = 30
+        
+        # Sync round time in seconds 
+        self.sync_time = 1

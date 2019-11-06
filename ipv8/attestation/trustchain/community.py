@@ -89,6 +89,7 @@ class TrustChainCommunity(Community):
         self.db_cleanup_lc = self.register_task("db_cleanup", LoopingCall(self.do_db_cleanup))
         self.db_cleanup_lc.start(600)
         self.known_graph = {}
+        self.periodic_sync_lc = {}
 
         # Trustchain SubCommunities
         self.ipv8 = kwargs.pop('ipv8', None)
@@ -105,6 +106,12 @@ class TrustChainCommunity(Community):
             chr(6): self.received_half_block_pair_broadcast,
             chr(7): self.received_empty_crawl_response,
         })
+
+    def trustchain_sync(self, peer_mid):
+        blk = self.persistence.get_latest_peer_block(peer_mid)
+        val = self.ipv8.overlays[self.pex_map[peer_mid]].get_peers()
+        if blk:
+            self.send_block(blk, address_set=val)
 
     def do_db_cleanup(self):
         """
@@ -226,7 +233,7 @@ class TrustChainCommunity(Community):
 
             self.relayed_broadcasts.append(block.block_id)
 
-    def send_block(self, block, address=None, ttl=1):
+    def send_block(self, block, address=None, address_set=None, ttl=1):
         """
         Send a block to a specific address, or do a broadcast to known peers if no peer is specified.
         """
@@ -243,8 +250,16 @@ class TrustChainCommunity(Community):
         else:
             payload = HalfBlockBroadcastPayload.from_half_block(block, ttl).to_pack_list()
             packet = self._ez_pack(self._prefix, 5, [dist, payload], False)
-            f = min(len(self.get_peers()), self.settings.broadcast_fanout)
-            self.logger.debug("Broadcasting block to %s peers", f)
+
+            if address_set:
+                f = min(len(address_set), self.settings.broadcast_fanout)
+                self.logger.debug("Broadcasting block in a back-channel  to %s peers", f)
+                peers = (p.address for p in random.sample(address_set, f))
+            else:
+                f = min(len(self.get_peers()), self.settings.broadcast_fanout)
+                self.logger.debug("Broadcasting block in a main-channel  to %s peers", f)
+                peers = (p.address for p in random.sample(self.get_peers(), f))
+
             peers = (p.address for p in random.sample(self.get_peers(), f))
             for p in peers:
                 self.endpoint.send(p, packet)
@@ -374,7 +389,7 @@ class TrustChainCommunity(Community):
             # self.update_notify(block)
 
         if peer == self.my_peer:
-            # We created a self-signed block
+            # We created a self-signed block / initial claim, send to the neighbours
             if block.type not in self.settings.block_types_bc_disabled and not self.settings.is_hiding:
                 self.send_block(block)
             return succeed((block, None)) if public_key == ANY_COUNTERPARTY_PK else succeed((block, linked))
@@ -388,10 +403,6 @@ class TrustChainCommunity(Community):
         # If there is a counterparty to sign, we send it
         self.send_block(block, address=peer.address)
 
-        # We broadcast the block in the network if we initiated a transaction
-        # if block.type not in self.settings.block_types_bc_disabled and not linked and not self.settings.is_hiding:
-        #    self.send_block(block)
-
         if not linked:
             # We keep track of this outstanding sign request.
             sign_deferred = Deferred()
@@ -402,16 +413,6 @@ class TrustChainCommunity(Community):
                 return sign_deferred
             return succeed((block, None))
         else:
-            # We return a deferred that fires immediately with both half blocks.
-            if peer.mid not in self.pex.keys():
-                self.logger.info("Signing a linked block, pex not in keys")
-                self.send_block_pair(linked, block)
-            else:
-                self.logger.info("Signing a linked block, pex is in keys")
-                self.send_block_pair(linked, block)
-                val = self.ipv8.overlays[self.pex_map[peer.mid]].get_peers()
-                self.logger.info("Number of peers in back overlay is %s, %s", val is None, len(val))
-                self.send_block_pair(linked, block, address_set=val)
             return succeed((linked, block))
 
     @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, HalfBlockPayload)
@@ -430,8 +431,8 @@ class TrustChainCommunity(Community):
         """
         payload.ttl -= 1
         block = self.get_block_class(payload.type).from_payload(payload, self.serializer)
-        # self.update_notify(block)
-        self.validate_persist_block(block)
+        peer = Peer(payload.public_key, source_address)
+        self.validate_persist_block(block, peer)
 
         if block.block_id not in self.relayed_broadcasts and payload.ttl > 0:
             if self.settings.use_informed_broadcast:
@@ -447,13 +448,9 @@ class TrustChainCommunity(Community):
         """
         block1, block2 = self.get_block_class(payload.type1).from_pair_payload(payload, self.serializer)
         self.logger.info("Received block pair %s, %s", block1, block2)
-        # self.notify_listeners(block1)
-        # self.notify_listeners(block2)
-        # self.update_notify(block1)
-        # self.update_notify(block2)
-
-        self.validate_persist_block(block1)
-        self.validate_persist_block(block2)
+        peer = Peer(payload.public_key, source_address)
+        self.validate_persist_block(block1, peer)
+        self.validate_persist_block(block2, peer)
 
     @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, HalfBlockPairBroadcastPayload)
     def received_half_block_pair_broadcast(self, source_address, dist, payload):
@@ -462,8 +459,6 @@ class TrustChainCommunity(Community):
         """
         payload.ttl -= 1
         block1, block2 = self.get_block_class(payload.type1).from_pair_payload(payload, self.serializer)
-        # self.update_notify(block1)
-        # self.update_notify(block2)
         self.validate_persist_block(block1)
         self.validate_persist_block(block2)
 
@@ -485,7 +480,7 @@ class TrustChainCommunity(Community):
                              'seq_num': block.sequence_number, "link": block.link_sequence_number
                              })
 
-    def validate_persist_block(self, block):
+    def validate_persist_block(self, block, peer=None):
         """
         Validate a block and if it's valid, persist it. Return the validation result.
         :param block: The block to validate and persist.
@@ -499,6 +494,8 @@ class TrustChainCommunity(Community):
             self.notify_listeners(block)
             if not self.persistence.contains(block):
                 self.persistence.add_block(block)
+                if peer:
+                    self.persistence.add_peer(peer)
         return validation
 
     def notify_listeners(self, block):
@@ -521,7 +518,7 @@ class TrustChainCommunity(Community):
         """
         Process a received half block.
         """
-        validation = self.validate_persist_block(blk)
+        validation = self.validate_persist_block(blk, peer)
         self.logger.info("Block validation result %s, %s, (%s)", validation[0], validation[1], blk)
         if not self.settings.ignore_validation and validation[0] == ValidationResult.invalid:
             return fail(RuntimeError("Block could not be validated: %s, %s" % (validation[0], validation[1])))
@@ -828,13 +825,18 @@ class TrustChainCommunity(Community):
             index = len(self.ipv8.overlays)
             self.ipv8.overlays.append(community)
             # Discover and connect to everyone for 50 seconds
-            # self.ipv8.strategies.append((RandomWalk(community, total_run=50), -1))
+            self.ipv8.strategies.append((RandomWalk(community, total_run=self.settings.intro_run), -1))
             self.pex[peer.mid] = community
             self.pex_map[peer.mid] = index
             if self.bootstrap_master:
                 self.logger.info('Proceed with a bootstrap master')
                 for k in self.bootstrap_master:
                     community.walk_to(k)
+            # Start sync task after the discovery
+            self.periodic_sync_lc[peer.mid] = self.register_task("sync_"+str(peer.mid),
+                                                                 LoopingCall(self.trustchain_sync, peer.mid),
+                                                                 delay=self.settings.intro_run)
+            self.periodic_sync_lc[peer.mid].start(self.settings.sync_time, now=False)
 
         # Check if we have pending crawl requests for this peer
         has_intro_crawl = self.request_cache.has(u"introcrawltimeout", IntroCrawlTimeout.get_number_for(peer))
