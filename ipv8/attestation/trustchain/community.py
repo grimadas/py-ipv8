@@ -829,13 +829,15 @@ class TrustChainCommunity(Community):
             index = len(self.ipv8.overlays)
             self.ipv8.overlays.append(community)
             # Discover and connect to everyone for 50 seconds
-            self.ipv8.strategies.append((RandomWalk(community, total_run=self.settings.intro_run), -1))
+            #
             self.pex[peer.mid] = community
             self.pex_map[peer.mid] = index
             if self.bootstrap_master:
                 self.logger.info('Proceed with a bootstrap master')
                 for k in self.bootstrap_master:
                     community.walk_to(k)
+            else:
+                self.ipv8.strategies.append((RandomWalk(community, total_run=self.settings.intro_run), -1))
             # Start sync task after the discovery
             self.periodic_sync_lc[peer.mid] = self.register_task("sync_"+str(peer.mid),
                                                                  LoopingCall(self.trustchain_sync, peer.mid))
