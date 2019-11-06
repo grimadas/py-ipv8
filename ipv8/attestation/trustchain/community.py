@@ -108,6 +108,7 @@ class TrustChainCommunity(Community):
         })
 
     def trustchain_sync(self, peer_mid):
+        self.logger.info("Sync for the info peer  %s", peer_mid)
         blk = self.persistence.get_latest_peer_block(peer_mid)
         val = self.ipv8.overlays[self.pex_map[peer_mid]].get_peers()
         if blk:
@@ -834,9 +835,7 @@ class TrustChainCommunity(Community):
                     community.walk_to(k)
             # Start sync task after the discovery
             self.periodic_sync_lc[peer.mid] = self.register_task("sync_"+str(peer.mid),
-                                                                 LoopingCall(self.trustchain_sync, peer.mid),
-                                                                 delay=self.settings.intro_run,
-                                                                 interval=self.settings.sync_time)
+                                                                 LoopingCall(self.trustchain_sync, peer.mid))
             self.periodic_sync_lc[peer.mid].start(self.settings.sync_time)
 
         # Check if we have pending crawl requests for this peer
