@@ -1,5 +1,7 @@
 from __future__ import absolute_import
 
+import orjson as json
+
 import time
 from binascii import hexlify
 from hashlib import sha256
@@ -9,7 +11,6 @@ from six import binary_type
 from .payload import HalfBlockPayload
 from ...database import database_blob
 from ...keyvault.crypto import default_eccrypto
-from ...messaging.deprecated.encoding import decode, encode
 from ...messaging.serialization import default_serializer
 from ...util import old_round
 
@@ -33,7 +34,7 @@ class TrustChainBlock(object):
             # data
             self.type = b'unknown'
             self.transaction = {}
-            self._transaction = encode({})
+            self._transaction = json.dumps({})
             # identity
             self.public_key = EMPTY_PK
             self.sequence_number = GENESIS_SEQ
@@ -48,7 +49,7 @@ class TrustChainBlock(object):
             self.insert_time = None
         else:
             self._transaction = data[1] if isinstance(data[1], bytes) else binary_type(data[1])
-            _, self.transaction = decode(self._transaction)
+            self.transaction = json.loads(self._transaction)
             (self.type, self.public_key, self.sequence_number, self.link_public_key, self.link_sequence_number,
              self.previous_hash, self.signature, self.timestamp, self.insert_time) = (data[0], data[2], data[3],
                                                                                       data[4], data[5], data[6],
@@ -426,7 +427,7 @@ class TrustChainBlock(object):
             ret.sequence_number = blk.sequence_number + 1
             ret.previous_hash = blk.hash
 
-        ret._transaction = encode(ret.transaction)
+        ret._transaction = json.dumps(ret.transaction)
         ret.public_key = public_key
         ret.signature = EMPTY_SIG
         ret.hash = ret.calculate_hash()
@@ -450,10 +451,12 @@ class TrustChainBlock(object):
         for key, value in self.__dict__.items():
             if key == 'key' or key == 'serializer' or key == 'crypto' or key == '_transaction':
                 continue
-            if isinstance(value, binary_type) and key != "insert_time" and key != "type":
+            if key == 'transaction':
+                yield key, json.loads(self._transaction)[1]
+            elif isinstance(value, binary_type) and key != "insert_time" and key != "type":
                 yield key, hexlify(value).decode('utf-8')
             else:
-                yield key, value
+                yield key, value.decode('utf-8') if isinstance(value, binary_type) else value
 
 
 class ValidationResult(object):
