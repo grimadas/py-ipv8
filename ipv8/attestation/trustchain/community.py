@@ -842,7 +842,8 @@ class TrustChainCommunity(Community):
             self.periodic_sync_lc[peer.mid] = self.register_task("sync_"+str(peer.mid),
                                                                  LoopingCall(self.trustchain_sync, peer.mid))
             self.register_anonymous_task("sync_start_"+str(peer.mid),
-                                         reactor.callLater(self.settings.intro_run + random.random(),
+                                         reactor.callLater(self.settings.intro_run +
+                                                           self.settings.sync_time*random.random(),
                                                            self.defered_sync_start, peer.mid))
 
         # Check if we have pending crawl requests for this peer

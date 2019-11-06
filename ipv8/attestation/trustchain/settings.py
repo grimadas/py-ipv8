@@ -35,7 +35,7 @@ class TrustChainSettings(object):
         self.my_id = 1
         
         # Sub-community introduction time in seconds 
-        self.intro_run = 30
+        self.intro_run = 100
         
         # Sync round time in seconds 
         self.sync_time = 1
