@@ -810,6 +810,9 @@ class TrustChainCommunity(Community):
         return super(TrustChainCommunity, self).create_introduction_response(lan_socket_address, socket_address,
                                                                              identifier, introduction, extra_bytes)
 
+    def defered_sync_start(self, mid):
+        self.periodic_sync_lc[mid].start(self.settings.sync_time)
+
     @synchronized
     def introduction_response_callback(self, peer, dist, payload):
         chain_length = None
@@ -836,7 +839,9 @@ class TrustChainCommunity(Community):
             # Start sync task after the discovery
             self.periodic_sync_lc[peer.mid] = self.register_task("sync_"+str(peer.mid),
                                                                  LoopingCall(self.trustchain_sync, peer.mid))
-            self.periodic_sync_lc[peer.mid].start(self.settings.sync_time)
+            self.register_anonymous_task("sync_start_"+str(peer.mid),
+                                         reactor.callLater(self.settings.intro_run + random.random(),
+                                                           self.defered_sync_start, peer.mid))
 
         # Check if we have pending crawl requests for this peer
         has_intro_crawl = self.request_cache.has(u"introcrawltimeout", IntroCrawlTimeout.get_number_for(peer))
