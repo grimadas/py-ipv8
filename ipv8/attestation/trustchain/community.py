@@ -813,6 +813,13 @@ class TrustChainCommunity(Community):
     def defered_sync_start(self, mid):
         self.periodic_sync_lc[mid].start(self.settings.sync_time)
 
+    def defered_sync_stop(self, mid):
+        self.periodic_sync_lc[mid].stop()
+
+    def all_sync_stop(self):
+        for mid in self.pex:
+            self.defered_sync_stop(mid)
+
     @synchronized
     def introduction_response_callback(self, peer, dist, payload):
         chain_length = None
