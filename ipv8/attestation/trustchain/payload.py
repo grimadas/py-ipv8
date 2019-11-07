@@ -29,6 +29,30 @@ class CrawlRequestPayload(Payload):
     def from_unpack_list(cls, public_key, start_seq_num, end_seq_num, crawl_id):
         return CrawlRequestPayload(public_key, start_seq_num, end_seq_num, crawl_id)
 
+class PeerCrawlRequestPayload(Payload):
+    """
+    Request a crawl that will estimate the balance of a peer that is not older than some seq_num
+    """
+
+    format_list = ['74s', 'l', 'I']
+
+    def __init__(self, public_key, seq_num, crawl_id):
+        super(PeerCrawlRequestPayload, self).__init__()
+        self.public_key = public_key
+        self.seq_num = seq_num
+        self.crawl_id = crawl_id
+
+    def to_pack_list(self):
+        data = [('74s', self.public_key),
+                ('l', self.seq_num),
+                ('I', self.crawl_id)]
+
+        return data
+
+    @classmethod
+    def from_unpack_list(cls, public_key, seq_num, crawl_id):
+        return PeerCrawlRequestPayload(public_key, seq_num, crawl_id)
+
 
 class EmptyCrawlResponsePayload(Payload):
     """
