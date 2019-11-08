@@ -29,6 +29,29 @@ class CrawlRequestPayload(Payload):
     def from_unpack_list(cls, public_key, start_seq_num, end_seq_num, crawl_id):
         return CrawlRequestPayload(public_key, start_seq_num, end_seq_num, crawl_id)
 
+
+class SignedBlockPayload(Payload):
+    """
+    Signed block by the third party to act as rumor
+    """
+    format_list = ['74s', '64s', 'payload']
+
+    def __init__(self, public_key, signature, block):
+        self.public_key = public_key
+        self.signature = signature
+        self.block = block
+
+    def to_pack_list(self):
+        data = [('74s', self.public_key),
+                ('64s', self.signature),
+                ('payload', self.block)]
+        return data
+
+    @classmethod
+    def from_unpack_list(cls, public_key, signature, block):
+        return SignedBlockPayload(public_key, signature, block)
+
+
 class PeerCrawlRequestPayload(Payload):
     """
     Request a crawl that will estimate the balance of a peer that is not older than some seq_num

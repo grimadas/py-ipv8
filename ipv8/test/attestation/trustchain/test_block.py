@@ -20,7 +20,8 @@ class TestBlock(TrustChainBlock):
             link_pk = linked.public_key
             link_seq = linked.sequence_number
         else:
-            link_pk = crypto.generate_key(u"curve25519").pub().key_to_bin()
+            self.link_key = crypto.generate_key(u"curve25519")
+            link_pk = self.link_key.pub().key_to_bin()
             link_seq = 0
 
         transaction = transaction or {'id': 42}

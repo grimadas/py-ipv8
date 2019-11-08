@@ -163,9 +163,12 @@ class TrustChainCommunity(Community):
             # 1. Check last spends got from other peers
             # 2. Check that there are enough legit claims
             # TODO: fraud strategy: Sign everything
-            if self.persistence.get_verf_balance(block.public_key):
+            if self.persistence.get_balance(block.public_key) >= 0:
                 returnValue(True)
             else:
+                # Need to crawl more information to make decision
+
+
                 returnValue(False)
 
         if block.type == b'claim':
@@ -460,24 +463,18 @@ class TrustChainCommunity(Community):
         self.validate_persist_block(block2, peer)
 
 
-    def validate_claim(self, claim, spend):
+    def validate_claim(self, claim, peer):
         from_peer = claim.link_public_key
         to_peer = claim.public_key
 
-        if self.persistence.get_verf_balance(from_peer) > 0:
+        if self.persistence.get_balance(from_peer, True) > 0:
             return True
         else:
-            # Need to verify the from_peer -> chain
-            # Request the proofs from to_peer
-            # from_peer balance estimation
-            # Note that this code does not cover the scenario where we obtain this block indirectly.
-            if not self.request_cache.has(u"crawl", blk.hash_number):
-                crawl_deferred = self.send_crawl_request(peer,
-                                                         blk.public_key,
-                                                         max(GENESIS_SEQ, (blk.sequence_number
-                                                                           - self.settings.validation_range)),
-                                                         max(GENESIS_SEQ, blk.sequence_number - 1),
-                                                         for_half_block=blk)
+            # Need to get more information from the peer to verify the claim
+            if not self.request_cache.has(u"crawl", from_peer):
+                crawl_deferred = self.send_peer_crawl_request(peer,
+                                                         from_peer,
+                                                         claim.link_sequence_number)
                 return addCallback(crawl_deferred, lambda _: self.process_half_block(blk, peer))
 
     @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, HalfBlockPairBroadcastPayload)
@@ -572,12 +569,6 @@ class TrustChainCommunity(Community):
         self.logger.info("Received request block addressed to us (%s)", blk)
 
         def on_should_sign_outcome(should_sign):
-
-
-
-
-
-
                 self.persistence.get_claim_set(blk.public_key)
                 pass
 
@@ -597,7 +588,7 @@ class TrustChainCommunity(Community):
                                  validation)
                 # Note that this code does not cover the scenario where we obtain this block indirectly.
                 if not self.request_cache.has(u"crawl", blk.hash_number):
-                    crawl_deferred = self.send_crawl_request(peer,
+                    crawl_deferred = self.send_peer_crawl_request(peer,
                                                              blk.public_key,
                                                              max(GENESIS_SEQ, (blk.sequence_number
                                                                                - self.settings.validation_range)),
@@ -616,12 +607,16 @@ class TrustChainCommunity(Community):
         self.logger.info("Received peer crawl request from node %s for range",
                          hexlify(peer.public_key.key_to_bin())[-8:])
 
-        seq_num = payload.seq_num
+        seq_num = payload.
 
-        # It could be that our start_seq_num and end_seq_num are negative. If so, convert them to positive numbers,
-        # based on the last block of ones chain.
 
-        blocks = self.persistence.get_latest_peer_block(peer.public_key)
+        # Get latest pairwise blocks/ including self claims
+
+        spends = self.persistence.get_spends_proofs(payload.public_key)
+        claims = self.persistence.get_claims_proofs(payload.public_key)
+
+
+
         total_count = len(blocks)
 
         if total_count == 0:
@@ -652,10 +647,6 @@ class TrustChainCommunity(Community):
         self.endpoint.send(peer.address, packet)
 
         return crawl_deferred
-
-
-
-
 
 
     def crawl_chain(self, peer, latest_block_num=0):
