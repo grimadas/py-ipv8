@@ -7,6 +7,7 @@ from __future__ import absolute_import
 
 import csv
 import logging
+import orjson
 import os
 import random
 import struct
@@ -105,7 +106,8 @@ class TrustChainCommunity(Community):
             chr(5): self.received_half_block_broadcast,
             chr(6): self.received_half_block_pair_broadcast,
             chr(7): self.received_empty_crawl_response,
-            chr(8):
+            chr(8): self.received_peer_crawl_request,
+            chr(9): self.received_peer_crawl_response,
         })
 
     def trustchain_sync(self, peer_mid):
@@ -114,6 +116,11 @@ class TrustChainCommunity(Community):
         val = self.ipv8.overlays[self.pex_map[peer_mid]].get_peers()
         if blk:
             self.send_block(blk, address_set=val)
+        # Send also the last pairwise block to the peers
+        if peer_mid in self.peer_map:
+            blk = self.persistence.get_last_pairwise_block(self.peer_map[peer_mid], self.my_peer.public_key.key_to_bin())
+            if blk:
+                self.send_block_pair(blk[0], blk[1], address_set=val)
 
     def do_db_cleanup(self):
         """
@@ -156,25 +163,6 @@ class TrustChainCommunity(Community):
         Return whether we should sign the block in the passed message.
         @param block: the block we want to sign or not.
         """
-        if block.type == b'spend':
-            # verify if my peer can claim this spend
-
-            # Verify the peer if it can pay:
-            # 1. Check last spends got from other peers
-            # 2. Check that there are enough legit claims
-            # TODO: fraud strategy: Sign everything
-            if self.persistence.get_balance(block.public_key) >= 0:
-                returnValue(True)
-            else:
-                # Need to crawl more information to make decision
-
-
-                returnValue(False)
-
-        if block.type == b'claim':
-            self.logger.info("Signing claim block %s", block)
-            returnValue(True)
-
         if block.type not in self.listeners_map:
             returnValue(False)  # There are no listeners for this block
 
@@ -462,20 +450,17 @@ class TrustChainCommunity(Community):
         self.validate_persist_block(block1, peer)
         self.validate_persist_block(block2, peer)
 
-
-    def validate_claim(self, claim, peer):
-        from_peer = claim.link_public_key
-        to_peer = claim.public_key
-
-        if self.persistence.get_balance(from_peer, True) > 0:
-            return True
-        else:
+    def validate_claims(self, last_block, peer):
+        from_peer = self.persistence.key_to_id(last_block.public_key)
+        crawl_id = int(from_peer, 16)
+        if not self.request_cache.has(u"crawl", crawl_id):
             # Need to get more information from the peer to verify the claim
-            if not self.request_cache.has(u"crawl", from_peer):
-                crawl_deferred = self.send_peer_crawl_request(peer,
-                                                         from_peer,
-                                                         claim.link_sequence_number)
-                return addCallback(crawl_deferred, lambda _: self.process_half_block(blk, peer))
+            except_pack = orjson.dumps(list(self.persistence.get_known_chains(from_peer)))
+            crawl_deferred = self.send_peer_crawl_request(crawl_id, peer,
+                                                          last_block.sequence_number, except_pack)
+            return crawl_deferred
+        else:
+            return self.request_cache.get(u'crawl', crawl_id).crawl_deferred
 
     @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, HalfBlockPairBroadcastPayload)
     def received_half_block_pair_broadcast(self, source_address, dist, payload):
@@ -569,70 +554,62 @@ class TrustChainCommunity(Community):
         self.logger.info("Received request block addressed to us (%s)", blk)
 
         def on_should_sign_outcome(should_sign):
-                self.persistence.get_claim_set(blk.public_key)
-                pass
-
-
             if not should_sign:
-                self.logger.info("Not signing block %s", blk)
-                return succeed(None)
+                    self.logger.info("Not signing block %s", blk)
+                    return succeed(None)
 
-            return self.sign_block(peer, linked=blk, block_type=b'claim')
-
-            # It is important that the request matches up with its previous block, gaps cannot be tolerated at
-            # this point. We already dropped invalids, so here we delay this message if the result is partial,
-            # partial_previous or no-info. We send a crawl request to the requester to (hopefully) close the gap
-            if (validation[0] == ValidationResult.partial_previous or validation[0] == ValidationResult.partial
-                or validation[0] == ValidationResult.no_info) and self.settings.validation_range > 0:
-                self.logger.info("Request block could not be validated sufficiently, crawling requester. %s",
-                                 validation)
-                # Note that this code does not cover the scenario where we obtain this block indirectly.
-                if not self.request_cache.has(u"crawl", blk.hash_number):
-                    crawl_deferred = self.send_peer_crawl_request(peer,
-                                                             blk.public_key,
-                                                             max(GENESIS_SEQ, (blk.sequence_number
-                                                                               - self.settings.validation_range)),
-                                                             max(GENESIS_SEQ, blk.sequence_number - 1),
-                                                             for_half_block=blk)
+            peer_id = self.persistence.key_to_id(blk.public_key)
+            if blk.type == b'spend':
+                if self.persistence.get_balance(peer_id) < 0:
+                    crawl_deferred = self.validate_claims(blk, peer)
                     return addCallback(crawl_deferred, lambda _: self.process_half_block(blk, peer))
-
+                return self.sign_block(peer, linked=blk, block_type=b'claim')
         # determine if we want to sign this block
         return addCallback(self.should_sign(blk), on_should_sign_outcome)
 
 
     @synchronized
+    @lazy_wrapper(GlobalTimeDistributionPayload, PeerCrawlResponsePayload)
+    def received_peer_crawl_response(self, peer, dist, payload: PeerCrawlResponsePayload):
+
+        cache = self.request_cache.get(u"crawl", payload.crawl_id)
+        if cache:
+            peer_id = hex(payload.crawl_id)[2:]
+            self.persistence.dump_chain(peer_id, orjson.loads(payload.chain))
+            cache.received_block(1, 0)
+
+    def send_peer_crawl_response(self, peer, crawl_id, chain):
+        """
+        Send chain to response for the peer crawl
+        """
+        global_time = self.claim_global_time()
+        auth = BinMemberAuthenticationPayload(self.my_peer.public_key.key_to_bin()).to_pack_list()
+        payload = PeerCrawlResponsePayload(crawl_id, chain).to_pack_list()
+        dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
+
+        packet = self._ez_pack(self._prefix, 9, [auth, dist, payload])
+        self.endpoint.send(peer.address, packet)
+
+    @synchronized
     @lazy_wrapper(GlobalTimeDistributionPayload, PeerCrawlRequestPayload)
-    def received_peer_crawl_request(self, peer, dist, payload):
+    def received_peer_crawl_request(self, peer, dist, payload: PeerCrawlRequestPayload):
 
         self.logger.info("Received peer crawl request from node %s for range",
                          hexlify(peer.public_key.key_to_bin())[-8:])
 
-        seq_num = payload.
-
-
+        # Need to convince peer with minimum number of blocks send
         # Get latest pairwise blocks/ including self claims
 
-        spends = self.persistence.get_spends_proofs(payload.public_key)
-        claims = self.persistence.get_claims_proofs(payload.public_key)
+        peer_id = hex(payload.crawl_id)[2:]
+        pack_except = set(orjson.loads(payload.pack_except))
+        chain = list(self.persistence.get_peer_chain(peer_id, pack_except=pack_except))
 
+        self.send_peer_crawl_response(peer,payload.crawl_id, orjson.dumps(chain))
 
-
-        total_count = len(blocks)
-
-        if total_count == 0:
-            global_time = self.claim_global_time()
-            response_payload = EmptyCrawlResponsePayload(payload.crawl_id).to_pack_list()
-            dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
-            packet = self._ez_pack(self._prefix, 9, [dist, response_payload], False)
-            self.endpoint.send(peer.address, packet)
-        else:
-            self.send_crawl_responses(blocks, peer, payload.crawl_id)
-
-    def send_peer_crawl_request(self, peer, public_key, seq_num):
+    def send_peer_crawl_request(self, crawl_id, peer, seq_num, pack_except):
         """
         Send a crawl request to a specific peer.
         """
-        crawl_id = RandomNumberCache.find_unclaimed_identifier(self.request_cache, u"crawl")
         crawl_deferred = Deferred()
         self.request_cache.add(CrawlRequestCache(self, crawl_id, crawl_deferred))
         self.logger.info("Requesting balance proof for peer %s at seq num %d with id %d",
@@ -640,12 +617,11 @@ class TrustChainCommunity(Community):
 
         global_time = self.claim_global_time()
         auth = BinMemberAuthenticationPayload(self.my_peer.public_key.key_to_bin()).to_pack_list()
-        payload = PeerCrawlRequestPayload(public_key, seq_num, crawl_id).to_pack_list()
+        payload = PeerCrawlRequestPayload(seq_num, crawl_id, pack_except).to_pack_list()
         dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
 
         packet = self._ez_pack(self._prefix, 8, [auth, dist, payload])
         self.endpoint.send(peer.address, packet)
-
         return crawl_deferred
 
 
