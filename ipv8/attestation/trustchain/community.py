@@ -473,9 +473,6 @@ class TrustChainCommunity(Community):
         self.validate_persist_block(block1)
         self.validate_persist_block(block2)
 
-        if payload.ttl == 0:
-            self.validate_claim(block1, block2)
-
         if block1.block_id not in self.relayed_broadcasts and payload.ttl > 0:
             if self.settings.use_informed_broadcast:
                 fanout = self.settings.broadcast_fanout - 1
