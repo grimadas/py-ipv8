@@ -575,7 +575,7 @@ class TrustChainCommunity(Community):
         if cache:
             peer_id = hex(payload.crawl_id)[2:]
             self.logger.info("Dump chain for %s, balance before is %s", peer_id, self.persistence.get_balance(peer_id))
-            self.persistence.dump_chain(peer_id, orjson.loads(payload.chain))
+            self.persistence.dump_peer_status(peer_id, orjson.loads(payload.chain))
             self.logger.info("Dump chain for %s, balance after is %s", peer_id, self.persistence.get_balance(peer_id))
             cache.received_block(1, 1)
         else:
@@ -597,17 +597,17 @@ class TrustChainCommunity(Community):
     @lazy_wrapper(GlobalTimeDistributionPayload, PeerCrawlRequestPayload)
     def received_peer_crawl_request(self, peer, dist, payload: PeerCrawlRequestPayload):
 
-        self.logger.info("Received peer crawl request from node %s for range",
-                         hexlify(peer.public_key.key_to_bin())[-8:])
-
+        
         # Need to convince peer with minimum number of blocks send
         # Get latest pairwise blocks/ including self claims
 
         peer_id = hex(payload.crawl_id)[2:]
         pack_except = set(orjson.loads(payload.pack_except))
-        chain = list(self.persistence.get_peer_chain(peer_id, pack_except=pack_except))
-
-        self.send_peer_crawl_response(peer,payload.crawl_id, orjson.dumps(chain))
+        status = self.persistence.get_peer_status(peer_id)
+        s1 = orjson.dumps(status)
+        self.logger.info("Received peer crawl from node %s for range, sending status len %s",
+                         hexlify(peer.public_key.key_to_bin())[-8:], len(s1))
+        self.send_peer_crawl_response(peer,payload.crawl_id, s1)
 
     def send_peer_crawl_request(self, crawl_id, peer, seq_num, pack_except):
         """
