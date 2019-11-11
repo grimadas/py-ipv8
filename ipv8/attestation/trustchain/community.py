@@ -456,7 +456,8 @@ class TrustChainCommunity(Community):
         crawl_id = int(from_peer, 16)
         if not self.request_cache.has(u"crawl", crawl_id):
             # Need to get more information from the peer to verify the claim
-            except_pack = orjson.dumps(list(self.persistence.get_known_chains(from_peer)))
+            #except_pack = orjson.dumps(list(self.persistence.get_known_chains(from_peer)))
+            except_pack = orjson.dumps(list())
             crawl_deferred = self.send_peer_crawl_request(crawl_id, peer,
                                                           last_block.sequence_number, except_pack)
             return crawl_deferred
