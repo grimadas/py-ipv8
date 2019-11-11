@@ -575,9 +575,12 @@ class TrustChainCommunity(Community):
         if cache:
             peer_id = hex(payload.crawl_id)[2:]
             self.logger.info("Dump chain for %s, balance before is %s", peer_id, self.persistence.get_balance(peer_id))
-            self.persistence.dump_peer_status(peer_id, orjson.loads(payload.chain))
+            res = self.persistence.dump_peer_status(peer_id, orjson.loads(payload.chain))
             self.logger.info("Dump chain for %s, balance after is %s", peer_id, self.persistence.get_balance(peer_id))
-            cache.received_block(1, 1)
+            if res:
+                cache.received_block(1, 1)
+            else:
+                cache.received_empty_response()
         else:
             self.logger.error("Received peer crawl with unknown crawl id %s", payload.crawl_id)
 
