@@ -453,7 +453,7 @@ class TrustChainCommunity(Community):
 
     def validate_claims(self, last_block, peer):
         from_peer = self.persistence.key_to_id(last_block.public_key)
-        crawl_id = int(from_peer, 16)
+        crawl_id =  self.persistence.id_to_int(from_peer)
         if not self.request_cache.has(u"crawl", crawl_id):
             # Need to get more information from the peer to verify the claim
             #except_pack = orjson.dumps(list(self.persistence.get_known_chains(from_peer)))
@@ -573,7 +573,7 @@ class TrustChainCommunity(Community):
 
         cache = self.request_cache.get(u"crawl", payload.crawl_id)
         if cache:
-            peer_id = hex(payload.crawl_id)[2:]
+            peer_id = self.persistence.int_to_id(payload.crawl_id)
             self.logger.info("Dump chain for %s, balance before is %s", peer_id, self.persistence.get_balance(peer_id))
             res = self.persistence.dump_peer_status(peer_id, orjson.loads(payload.chain))
             self.logger.info("Dump chain for %s, balance after is %s", peer_id, self.persistence.get_balance(peer_id))
@@ -604,7 +604,7 @@ class TrustChainCommunity(Community):
         # Need to convince peer with minimum number of blocks send
         # Get latest pairwise blocks/ including self claims
 
-        peer_id = hex(payload.crawl_id)[2:]
+        peer_id = self.persistence.int_to_id(payload.crawl_id)
         pack_except = set(orjson.loads(payload.pack_except))
         status = self.persistence.get_peer_status(peer_id)
         s1 = orjson.dumps(status)
