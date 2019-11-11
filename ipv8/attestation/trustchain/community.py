@@ -117,8 +117,9 @@ class TrustChainCommunity(Community):
         if blk:
             self.send_block(blk, address_set=val)
         # Send also the last pairwise block to the peers
-        if peer_mid in self.peer_map:
-            blk = self.persistence.get_last_pairwise_block(self.peer_map[peer_mid], self.my_peer.public_key.key_to_bin())
+        if peer_mid in self.persistence.peer_map:
+            blk = self.persistence.get_last_pairwise_block(self.persistence.peer_map[peer_mid],
+                                                           self.my_peer.public_key.key_to_bin())
             if blk:
                 self.send_block_pair(blk[0], blk[1], address_set=val)
 
