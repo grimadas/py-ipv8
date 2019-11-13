@@ -1,9 +1,12 @@
 from __future__ import absolute_import
 
+from binascii import hexlify, unhexlify
+
 import orjson as json
 
 from twisted.trial import unittest
 
+from ipv8.keyvault.public.libnaclkey import LibNaCLPK
 from ....attestation.trustchain.block import EMPTY_SIG, GENESIS_HASH, GENESIS_SEQ, TrustChainBlock, ValidationResult
 from ....keyvault.crypto import default_eccrypto
 
@@ -126,8 +129,27 @@ class TestTrustChainBlock(unittest.TestCase):
         Test creating a genesis block
         """
         key = default_eccrypto.generate_key(u"curve25519")
+
         db = MockDatabase()
-        block = TrustChainBlock.create(b'test', {b'id': 42}, db, key.pub().key_to_bin(), link=None)
+        tx = {"b'id'": 42, 'cond': hexlify(key.pub().key_to_bin()).decode('utf-8')}
+        print(tx)
+        print(key.pub().key_to_bin() == unhexlify(tx['cond']))
+        k2 = default_eccrypto.key_from_public_bin(unhexlify(tx['cond']))
+        print(k2.pub().key_to_bin())
+        print(key.pub().key_to_bin())
+        val = "23"
+        print((val).encode('utf-8'))
+        n = (val).encode('utf-8')
+        print(n.decode('utf-8'))
+        #n = unhexlify(val)
+        sign = default_eccrypto.create_signature(key,n)
+        print(sign)
+        print(default_eccrypto.is_valid_signature(k2, n, sign))
+        print(default_eccrypto.is_valid_signature(key,n, sign ))
+
+
+
+        block = TrustChainBlock.create(b'test', tx, db, key.pub().key_to_bin(), link=None)
         self.assertEqual(block.previous_hash, GENESIS_HASH)
         self.assertEqual(block.sequence_number, GENESIS_SEQ)
         self.assertEqual(block.public_key, key.pub().key_to_bin())
@@ -607,6 +629,7 @@ class TestTrustChainBlock(unittest.TestCase):
         """
         Test for error on double countersign fraud.
         """
+
         class FakeDB(object):
 
             def get_linked(self, _):

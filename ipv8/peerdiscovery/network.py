@@ -150,6 +150,12 @@ class Network(object):
             self.service_overlays[service_id] = overlay
             self.my_peer = overlay.my_peer
 
+    def get_service_peer_by_public_key_bin(self, public_key_bin, service_id):
+        with self.graph_lock:
+            peer = self.get_verified_by_public_key_bin(public_key_bin)
+            if peer and peer.mid in self.services_per_peer and service_id in self.services_per_peer[peer.mid]:
+                return peer
+
     def get_peers_for_service(self, service_id):
         """
         Get peers which support a certain service.

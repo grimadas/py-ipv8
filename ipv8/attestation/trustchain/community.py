@@ -123,6 +123,42 @@ class TrustChainCommunity(Community):
             if blk:
                 self.send_block_pair(blk[0], blk[1], address_set=val)
 
+    def get_hop_to_peer(self, peer_pub_key):
+        """
+        Get next hop to peer
+        :param peer:
+        :return:
+        """
+        p = self.get_peer_by_pub_key(peer_pub_key)
+        if p:
+            # Directly connected
+            return p
+        for peer_mid, sub_com in self.pex.items():
+            p = sub_com.get_peer_by_pub_key(peer_pub_key)
+            if p:
+                # Connected through peer_mid
+                return self.get_peer_by_mid(peer_mid)
+        # Peer not found => choose randomly??
+        return random.choice(list(self.get_peers()))
+
+    def noodle_spend(self, peer_pub_key, **kwargs):
+        peer = self.get_hop_to_peer(peer_pub_key)
+        if peer.public_key.key_to_bin() != peer_pub_key:
+            # do mulihop payment
+            transaction = kwargs.pop('transaction', None)
+            if not transaction:
+                return
+            transaction['condition'] = hexlify(peer_pub_key).decode('utf-8')
+            # generate nonce
+            peer_id = self.persistence.key_to_id(peer_pub_key)
+            transaction['nonce'] = self.persistence.get_new_peer_nonce(peer_id)
+            self.sign_block(peer,  public_key=peer_pub_key, transaction=transaction, **kwargs)
+        else:
+            self.sign_block(peer, public_key=peer_pub_key, **kwargs)
+
+    def noodle_sign(self, *args, **kwargs):
+        return self.sign_block(*args, **kwargs)
+
     def do_db_cleanup(self):
         """
         Cleanup the database if necessary.
@@ -347,7 +383,7 @@ class TrustChainCommunity(Community):
         assert transaction is None and linked is not None or transaction is not None and linked is None, \
             "Either provide a linked block or a transaction, not both %s, %s" % (peer, self.my_peer)
         assert (additional_info is None or additional_info is not None and linked is not None
-                and transaction is None and peer == self.my_peer and public_key == linked.public_key), \
+                and transaction is None), \
             "Either no additional info is provided or one provides it for a linked block"
         assert (linked is None or linked.link_public_key == self.my_peer.public_key.key_to_bin()
                 or linked.link_public_key == ANY_COUNTERPARTY_PK), "Cannot counter sign block not addressed to self"
@@ -453,10 +489,10 @@ class TrustChainCommunity(Community):
 
     def validate_claims(self, last_block, peer):
         from_peer = self.persistence.key_to_id(last_block.public_key)
-        crawl_id =  self.persistence.id_to_int(from_peer)
+        crawl_id = self.persistence.id_to_int(from_peer)
         if not self.request_cache.has(u"crawl", crawl_id):
             # Need to get more information from the peer to verify the claim
-            #except_pack = orjson.dumps(list(self.persistence.get_known_chains(from_peer)))
+            # except_pack = orjson.dumps(list(self.persistence.get_known_chains(from_peer)))
             except_pack = orjson.dumps(list())
             crawl_deferred = self.send_peer_crawl_request(crawl_id, peer,
                                                           last_block.sequence_number, except_pack)
@@ -540,7 +576,6 @@ class TrustChainCommunity(Community):
         link_block_id_int = int(hexlify(blk.linked_block_id), 16) % 100000000
         if self.request_cache.has(u'sign', link_block_id_int):
             cache = self.request_cache.pop(u'sign', link_block_id_int)
-
             # We cannot guarantee that we're on a reactor thread so make sure we do this Twisted stuff on the reactor.
             reactor.callFromThread(cache.sign_deferred.callback, (blk, self.persistence.get_linked(blk)))
 
@@ -554,18 +589,33 @@ class TrustChainCommunity(Community):
 
         def on_should_sign_outcome(should_sign):
             if not should_sign:
-                    self.logger.info("Not signing block %s", blk)
-                    return succeed(None)
+                self.logger.info("Not signing block %s", blk)
+                return succeed(None)
 
             peer_id = self.persistence.key_to_id(blk.public_key)
             if blk.type == b'spend':
                 if self.persistence.get_balance(peer_id) < 0:
                     crawl_deferred = self.validate_claims(blk, peer)
                     return addCallback(crawl_deferred, lambda _: self.process_half_block(blk, peer))
+                if 'condition' in blk.transaction:
+                    # This is a multi-hop transaction, check it should be relayed?
+                    pub_key = unhexlify(blk.transaction['condition'])
+                    if self.my_peer.public_key.key_to_bin() != pub_key:
+                        # if pub key spend not already send ??
+                        sign_deferred=self.noodle_spend(pub_key, blk)
+                        return addCallback(sign_deferred, lambda _: self.process_half_block(blk, peer))
+                        # In other case / get the signature and attach to the claim
+                    else:
+                        # Add additional_info
+                        sign = blk.crypto.create_signature(self.my_peer.key, str(blk.transaction['nonce']))
+
+
+
+
                 return self.sign_block(peer, linked=blk, block_type=b'claim')
+
         # determine if we want to sign this block
         return addCallback(self.should_sign(blk), on_should_sign_outcome)
-
 
     @synchronized
     @lazy_wrapper(GlobalTimeDistributionPayload, PeerCrawlResponsePayload)
@@ -600,7 +650,6 @@ class TrustChainCommunity(Community):
     @lazy_wrapper(GlobalTimeDistributionPayload, PeerCrawlRequestPayload)
     def received_peer_crawl_request(self, peer, dist, payload: PeerCrawlRequestPayload):
 
-        
         # Need to convince peer with minimum number of blocks send
         # Get latest pairwise blocks/ including self claims
 
@@ -610,7 +659,7 @@ class TrustChainCommunity(Community):
         s1 = orjson.dumps(status)
         self.logger.info("Received peer crawl from node %s for range, sending status len %s",
                          hexlify(peer.public_key.key_to_bin())[-8:], len(s1))
-        self.send_peer_crawl_response(peer,payload.crawl_id, s1)
+        self.send_peer_crawl_response(peer, payload.crawl_id, s1)
 
     def send_peer_crawl_request(self, crawl_id, peer, seq_num, pack_except):
         """
@@ -629,7 +678,6 @@ class TrustChainCommunity(Community):
         packet = self._ez_pack(self._prefix, 8, [auth, dist, payload])
         self.endpoint.send(peer.address, packet)
         return crawl_deferred
-
 
     def crawl_chain(self, peer, latest_block_num=0):
         """
@@ -651,8 +699,6 @@ class TrustChainCommunity(Community):
         if latest_block_num and sq == latest_block_num + 1:
             return succeed([])  # We don't have to crawl this node since we have its whole chain
         return self.send_crawl_request(peer, peer.public_key.key_to_bin(), sq, sq)
-
-
 
     def send_crawl_request(self, peer, public_key, start_seq_num, end_seq_num, for_half_block=None):
         """
@@ -911,11 +957,11 @@ class TrustChainCommunity(Community):
             else:
                 self.ipv8.strategies.append((RandomWalk(community, total_run=self.settings.intro_run), -1))
             # Start sync task after the discovery
-            self.periodic_sync_lc[peer.mid] = self.register_task("sync_"+str(peer.mid),
+            self.periodic_sync_lc[peer.mid] = self.register_task("sync_" + str(peer.mid),
                                                                  LoopingCall(self.trustchain_sync, peer.mid))
-            self.register_anonymous_task("sync_start_"+str(peer.mid),
+            self.register_anonymous_task("sync_start_" + str(peer.mid),
                                          reactor.callLater(self.settings.intro_run +
-                                                           self.settings.sync_time*random.random(),
+                                                           self.settings.sync_time * random.random(),
                                                            self.defered_sync_start, peer.mid))
 
         # Check if we have pending crawl requests for this peer
