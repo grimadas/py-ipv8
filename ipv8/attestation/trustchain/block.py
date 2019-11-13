@@ -3,7 +3,7 @@ from __future__ import absolute_import
 import orjson as json
 
 import time
-from binascii import hexlify
+from binascii import hexlify, unhexlify
 from hashlib import sha256
 
 from six import binary_type
@@ -146,6 +146,14 @@ class TrustChainBlock(object):
         :param database: the database to check against
         :return: A tuple consisting of a ValidationResult and a list of user string errors
         """
+        if 'condition' in self.transaction and self.type == b'claim':
+            # This is a claim of a conditional transaction
+            if 'proof' not in self.transaction or \
+                    not self.crypto.is_valid_signature(
+                        self.crypto.key_from_public_bin(unhexlify(self.transaction['condition'])),
+                        self.transaction['nonce'].encode(),
+                        unhexlify(self.transaction['proof'])):
+                return ValidationResult.invalid, ["Conditional payment not valid"]
         return ValidationResult.valid, []
 
     def validate(self, database):

@@ -73,7 +73,7 @@ class HalfBlockSignCache(NumberCache):
     This request cache keeps track of outstanding half block signature requests.
     """
 
-    def __init__(self, community, half_block, sign_deferred, socket_address, timeouts=0):
+    def __init__(self, community, half_block, sign_deferred, socket_address, timeouts=0, from_peer=None, seq_num=None):
         """
         A cache to keep track of the signing of one of our blocks by a counterparty.
 
@@ -91,6 +91,8 @@ class HalfBlockSignCache(NumberCache):
         self.sign_deferred = sign_deferred
         self.socket_address = socket_address
         self.timeouts = timeouts
+        self.from_peer = from_peer
+        self.seq_num = seq_num
 
     @property
     def timeout_delay(self):

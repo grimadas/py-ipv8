@@ -82,6 +82,9 @@ class TestTrustChainCommunity(TestBase):
             self.assertIsNotNone(self.nodes[node_nr].overlay.persistence.get(his_pubkey, 1))
             self.assertEqual(self.nodes[node_nr].overlay.persistence.get(his_pubkey, 1).link_sequence_number, 1)
 
+    def test_error(self):
+        self.assertTrue(False)
+
     @inlineCallbacks
     def test_get_linked(self):
         """

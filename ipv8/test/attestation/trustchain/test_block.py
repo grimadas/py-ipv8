@@ -50,7 +50,11 @@ class TestBlock(TrustChainBlock):
         self.transaction_validation_result = (ValidationResult.valid, [])
 
     def validate_transaction(self, database):
-        return self.transaction_validation_result
+        res, val = TrustChainBlock.validate_transaction(database)
+        if res!=ValidationResult.valid():
+            return res,val
+        else:
+            return self.transaction_validation_result
 
 
 class MockDatabase(object):
@@ -132,22 +136,6 @@ class TestTrustChainBlock(unittest.TestCase):
 
         db = MockDatabase()
         tx = {"b'id'": 42, 'cond': hexlify(key.pub().key_to_bin()).decode('utf-8')}
-        print(tx)
-        print(key.pub().key_to_bin() == unhexlify(tx['cond']))
-        k2 = default_eccrypto.key_from_public_bin(unhexlify(tx['cond']))
-        print(k2.pub().key_to_bin())
-        print(key.pub().key_to_bin())
-        val = "23"
-        print((val).encode('utf-8'))
-        n = (val).encode('utf-8')
-        print(n.decode('utf-8'))
-        #n = unhexlify(val)
-        sign = default_eccrypto.create_signature(key,n)
-        print(sign)
-        print(default_eccrypto.is_valid_signature(k2, n, sign))
-        print(default_eccrypto.is_valid_signature(key,n, sign ))
-
-
 
         block = TrustChainBlock.create(b'test', tx, db, key.pub().key_to_bin(), link=None)
         self.assertEqual(block.previous_hash, GENESIS_HASH)
@@ -345,6 +333,28 @@ class TestTrustChainBlock(unittest.TestCase):
         block.update_validation_level(prev_block, next_block, result)
 
         self.assertEqual(result.state, ValidationResult.partial_previous)
+
+    def test_valid_conditional_claim(self):
+        """
+        Conditional payment test
+        """
+        block = TestBlock(block_type=b'claim')
+        cond = hexlify(block.public_key).decode()
+        nonce = '4'
+        proof = hexlify(block.crypto.create_signature(block.key, nonce.encode())).decode()
+        block.transaction = {'proof':proof, 'condition':cond, 'nonce':nonce}
+
+        db = MockDatabase()
+        res, errors = block.validate_transaction(db)
+        self.assertEqual(ValidationResult.valid, res)
+
+    def test_invalid_conditional_claim(self):
+        """
+        """
+        block = TestBlock(transaction={"condition": 'test'}, block_type=b'claim')
+        db = MockDatabase()
+        res, errors = block.validate_transaction(db)
+        self.assertEqual(ValidationResult.invalid, res)
 
     def test_invariant_tx_errors(self):
         """
