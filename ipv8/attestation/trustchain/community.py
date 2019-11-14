@@ -592,7 +592,8 @@ class TrustChainCommunity(Community):
             cache = self.request_cache.pop(u'sign', link_block_id_int)
             # We cannot guarantee that we're on a reactor thread so make sure we do this Twisted stuff on the reactor.
             reactor.callFromThread(cache.sign_deferred.callback, (blk, self.persistence.get_linked(blk)))
-            if 'condition' in blk.transaction:
+            if 'condition' in blk.transaction and cache.from_peer:
+                # We need to answer to prev peer in the chain
                 if 'proof' in blk.transaction:
                     orig_blk = self.persistence.get(cache.from_peer.public_key.key_to_bin(), cache.seq_num)
                     new_tx = orig_blk.transaction
