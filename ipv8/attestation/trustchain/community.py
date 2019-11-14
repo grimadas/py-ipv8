@@ -141,13 +141,6 @@ class TrustChainCommunity(Community):
         else:
             source = self.my_peer.public_key.key_to_bin()
             target = peer_pub_key
-            self.logger.error("The graph is %s, %s",
-                              self.known_graph.number_of_nodes(),
-                              self.known_graph.number_of_edges())
-            for k in self.known_graph.nodes():
-                self.logger.error("The graph id %s",
-                                  k)
-
             path = nx.shortest_path(self.known_graph, source=source, target=target)
             p = self.get_peer_by_pub_key(path[1])
             return p
