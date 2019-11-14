@@ -141,19 +141,18 @@ class TrustChainCommunity(Community):
         else:
             source = self.my_peer.public_key.key_to_bin()
             target = peer_pub_key
-            path = nx.shortest_path(self.known_graph, source=source, target=target)
-            if len(path) < 2:
-                self.logger.error("Path to key %s is less than 2 %s",peer_pub_key, str(path))
-                # return random peer
-                return random.choice(list(self.get_peers()))
-            else:
-                p = self.get_peer_by_pub_key(path[1])
-                if not p:
-                    # p is not connected !
-                    self.logger.error("Got a path, but not connected! %s ", path[1])
-                    return random.choice(list(self.get_peers()))
-                return p
-
+            p = None
+            while not p and len(self.known_graph[source]) > 0:
+                path = nx.shortest_path(self.known_graph, source=source, target=target)
+                if len(path) < 2:
+                    self.logger.error("Path to key %s is less than 2 %s",peer_pub_key, str(path))
+                else:
+                    p = self.get_peer_by_pub_key(path[1])
+                    if not p:
+                        # p is not connected !
+                        self.logger.error("Got a path, but not connected! %s. Removing the edge ", path[1])
+                        self.known_graph.remove_edge(source, path[1])
+            return p
         # for peer_mid, sub_com in self.pex.items():
         #    p = sub_com.get_peer_by_pub_key(peer_pub_key)
         #    if p:
@@ -172,6 +171,9 @@ class TrustChainCommunity(Community):
             return None
         else:
             peer = self.get_hop_to_peer(pub_key)
+            if not peer:
+                self.logger.error("Tried all edges. My peer is not connected!")
+                return None
             peer_id = self.persistence.key_to_id(peer.public_key.key_to_bin())
             pw_total = self.persistence.get_total_pairwise_spends(my_id, peer_id)
             added = {"value": spend_value, "total_spend": pw_total + spend_value}
