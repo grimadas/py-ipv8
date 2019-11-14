@@ -142,8 +142,13 @@ class TrustChainCommunity(Community):
             source = self.my_peer.public_key.key_to_bin()
             target = peer_pub_key
             path = nx.shortest_path(self.known_graph, source=source, target=target)
-            p = self.get_peer_by_pub_key(path[1])
-            return p
+            if len(path) < 2:
+                self.logger.error("Path to key %s is less than 2 %s",peer_pub_key, str(path))
+                # return random peer
+                return random.choice(list(self.get_peers()))
+            else:
+                p = self.get_peer_by_pub_key(path[1])
+                return p
 
         # for peer_mid, sub_com in self.pex.items():
         #    p = sub_com.get_peer_by_pub_key(peer_pub_key)
@@ -151,7 +156,7 @@ class TrustChainCommunity(Community):
         #        # Connected through peer_mid
         #        return self.get_peer_by_mid(peer_mid)
         # Peer not found => choose randomly??
-        # return random.choice(list(self.get_peers()))
+        #
 
     def prepare_spend_transaction(self, pub_key, spend_value, **kwargs):
         # check the balance first
