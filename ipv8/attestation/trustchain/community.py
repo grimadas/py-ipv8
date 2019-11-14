@@ -139,11 +139,15 @@ class TrustChainCommunity(Community):
         if not self.known_graph:
             self.logger.error("World graph is not known")
         else:
-            source = b64decode(self.my_peer.public_key.key_to_bin())
-            target = b64decode(peer_pub_key)
+            source = b64encode(self.my_peer.public_key.key_to_bin())
+            target = b64encode(peer_pub_key)
             self.logger.error("The graph is %s, %s",
                               self.known_graph.number_of_nodes(),
                               self.known_graph.number_of_edges())
+            for k in self.known_graph.nodes():
+                self.logger.error("The graph id %s",
+                                  k)
+
             path = nx.shortest_path(self.known_graph, source=source, target=target)
             p = self.get_peer_by_pub_key(path[1])
             return p
