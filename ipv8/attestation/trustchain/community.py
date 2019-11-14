@@ -139,8 +139,8 @@ class TrustChainCommunity(Community):
         if not self.known_graph:
             self.logger.error("World graph is not known")
         else:
-            source = b64encode(self.my_peer.public_key.key_to_bin())
-            target = b64encode(peer_pub_key)
+            source = self.my_peer.public_key.key_to_bin()
+            target = peer_pub_key
             self.logger.error("The graph is %s, %s",
                               self.known_graph.number_of_nodes(),
                               self.known_graph.number_of_edges())
