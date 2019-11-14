@@ -148,6 +148,10 @@ class TrustChainCommunity(Community):
                 return random.choice(list(self.get_peers()))
             else:
                 p = self.get_peer_by_pub_key(path[1])
+                if not p:
+                    # p is not connected !
+                    self.logger.error("Got a path, but not connected! %s ", path[1])
+                    return random.choice(list(self.get_peers()))
                 return p
 
         # for peer_mid, sub_com in self.pex.items():
