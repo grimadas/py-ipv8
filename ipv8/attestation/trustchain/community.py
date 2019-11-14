@@ -16,6 +16,7 @@ from binascii import hexlify, unhexlify
 from functools import wraps
 from threading import RLock
 
+import networkx as nx
 from twisted.internet import reactor
 from twisted.internet.defer import Deferred, fail, inlineCallbacks, maybeDeferred, returnValue, succeed
 from twisted.internet.task import LoopingCall
@@ -89,7 +90,7 @@ class TrustChainCommunity(Community):
         self.listeners_map = {}  # Map of block_type -> [callbacks]
         self.db_cleanup_lc = self.register_task("db_cleanup", LoopingCall(self.do_db_cleanup))
         self.db_cleanup_lc.start(600)
-        self.known_graph = {}
+        self.known_graph = None
         self.periodic_sync_lc = {}
 
         # Trustchain SubCommunities
@@ -133,13 +134,21 @@ class TrustChainCommunity(Community):
         if p:
             # Directly connected
             return p
-        for peer_mid, sub_com in self.pex.items():
-            p = sub_com.get_peer_by_pub_key(peer_pub_key)
-            if p:
-                # Connected through peer_mid
-                return self.get_peer_by_mid(peer_mid)
+        # Look in the known_graph the path to the peer
+        if not self.known_graph:
+            self.logger.error("World graph is not known")
+        else:
+            path = nx.shortest_path(self.known_graph, source=self.my_peer.public_key.key_to_bin(), target=peer_pub_key)
+            p = self.get_peer_by_pub_key(path[1])
+            return p
+
+        # for peer_mid, sub_com in self.pex.items():
+        #    p = sub_com.get_peer_by_pub_key(peer_pub_key)
+        #    if p:
+        #        # Connected through peer_mid
+        #        return self.get_peer_by_mid(peer_mid)
         # Peer not found => choose randomly??
-        return random.choice(list(self.get_peers()))
+        # return random.choice(list(self.get_peers()))
 
     def prepare_spend_transaction(self, pub_key, spend_value, **kwargs):
         # check the balance first
