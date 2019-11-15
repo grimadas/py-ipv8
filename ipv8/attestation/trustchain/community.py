@@ -143,15 +143,17 @@ class TrustChainCommunity(Community):
             target = peer_pub_key
             p = None
             while not p and len(self.known_graph[source]) > 0:
-                path = nx.shortest_path(self.known_graph, source=source, target=target)
-                if len(path) < 2:
-                    self.logger.error("Path to key %s is less than 2 %s",peer_pub_key, str(path))
+                paths = list(nx.all_shortest_paths(self.known_graph, source=source, target=target))
+                random_path = random.choice(paths)
+                if len(random_path) < 2:
+                    self.logger.error("Path to key %s is less than 2 %s",peer_pub_key, str(random_path))
                 else:
-                    p = self.get_peer_by_pub_key(path[1])
+                    # Choose random path
+                    p = self.get_peer_by_pub_key(random_path[1])
                     if not p:
                         # p is not connected !
-                        self.logger.error("Got a path, but not connected! %s. Removing the edge ", path[1])
-                        self.known_graph.remove_edge(source, path[1])
+                        self.logger.error("Got a path, but not connected! %s. Removing the edge ", random_path[1])
+                        self.known_graph.remove_edge(source, random_path[1])
             return p
         # for peer_mid, sub_com in self.pex.items():
         #    p = sub_com.get_peer_by_pub_key(peer_pub_key)
