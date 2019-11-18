@@ -94,6 +94,8 @@ class TrustChainCommunity(Community):
         self.known_graph = None
         self.periodic_sync_lc = {}
 
+        self.mem_db_flush_lc = None
+
         # Trustchain SubCommunities
         self.ipv8 = kwargs.pop('ipv8', None)
         self.pex = {}
@@ -111,6 +113,14 @@ class TrustChainCommunity(Community):
             chr(8): self.received_peer_crawl_request,
             chr(9): self.received_peer_crawl_response,
         })
+
+    def init_mem_db_flush(self, flush_time):
+        if not self.mem_db_flush_lc:
+            self.mem_db_flush_lc = self.register_task("mem_db_flush", LoopingCall(self.mem_db_flush))
+            self.mem_db_flush_lc.start(flush_time)
+
+    def mem_db_flush(self):
+        self.persistence.commit_block_times()
 
     def trustchain_sync(self, peer_mid):
         self.logger.info("Sync for the info peer  %s", peer_mid)
@@ -989,6 +999,8 @@ class TrustChainCommunity(Community):
         self.periodic_sync_lc[mid].stop()
 
     def all_sync_stop(self):
+        if self.mem_db_flush_lc:
+            self.mem_db_flush_lc.stop()
         for mid in self.pex:
             self.defered_sync_stop(mid)
 
