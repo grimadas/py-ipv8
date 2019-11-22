@@ -28,7 +28,7 @@ from .block import ANY_COUNTERPARTY_PK, EMPTY_PK, GENESIS_SEQ, TrustChainBlock, 
 from .caches import ChainCrawlCache, CrawlRequestCache, HalfBlockSignCache, IntroCrawlTimeout
 from .database import TrustChainDB
 from .payload import *
-from ...attestation.trustchain.settings import TrustChainSettings
+from ...attestation.trustchain.settings import TrustChainSettings, SecurityMode
 from ...community import Community
 from ...lazy_community import lazy_wrapper, lazy_wrapper_unsigned, lazy_wrapper_unsigned_wd
 from ...messaging.payload_headers import BinMemberAuthenticationPayload, GlobalTimeDistributionPayload
@@ -95,6 +95,7 @@ class TrustChainCommunity(Community):
         self.periodic_sync_lc = {}
 
         self.mem_db_flush_lc = None
+        self.entangle_lc = None
 
         # Trustchain SubCommunities
         self.ipv8 = kwargs.pop('ipv8', None)
@@ -114,6 +115,11 @@ class TrustChainCommunity(Community):
             chr(9): self.received_peer_crawl_response,
         })
 
+    def prepare_entangle(self):
+        # Get last balance of all known peers
+        pass
+
+
     def init_mem_db_flush(self, flush_time):
         if not self.mem_db_flush_lc:
             self.mem_db_flush_lc = self.register_task("mem_db_flush", LoopingCall(self.mem_db_flush))
@@ -122,7 +128,7 @@ class TrustChainCommunity(Community):
     def mem_db_flush(self):
         self.persistence.commit_block_times()
 
-    def trustchain_sync(self, peer_mid):
+    def trustchain_vanilla_sync(self, peer_mid):
         self.logger.info("Sync for the info peer  %s", peer_mid)
         blk = self.persistence.get_latest_peer_block(peer_mid)
         val = self.ipv8.overlays[self.pex_map[peer_mid]].get_peers()
@@ -134,6 +140,26 @@ class TrustChainCommunity(Community):
                                                            self.my_peer.public_key.key_to_bin())
             if blk:
                 self.send_block_pair(blk[0], blk[1], address_set=val)
+
+
+    def choose_community_peers(self, peer_mid, current_seed, commitee_size):
+        val = self.ipv8.overlays[self.pex_map[peer_mid]].get_peers()
+        random.seed(current_seed)
+        return random.sample(val, commitee_size)
+
+
+    def choose_audit_commitee(self):
+        # Get the last block
+        hash = self.persistence.get_latest(self.my_peer.public_key.key_to_bin()).hash
+
+
+
+    def trustchain_active_sync(self, peer_mid):
+        pass
+
+
+    def trustchain_passive_sync(self, peer_mid):
+        pass
 
     def get_hop_to_peer(self, peer_pub_key):
         """
@@ -1030,12 +1056,15 @@ class TrustChainCommunity(Community):
             else:
                 self.ipv8.strategies.append((RandomWalk(community, total_run=self.settings.intro_run), -1))
             # Start sync task after the discovery
-            self.periodic_sync_lc[peer.mid] = self.register_task("sync_" + str(peer.mid),
-                                                                 LoopingCall(self.trustchain_sync, peer.mid))
-            self.register_anonymous_task("sync_start_" + str(peer.mid),
-                                         reactor.callLater(self.settings.intro_run +
-                                                           self.settings.sync_time * random.random(),
-                                                           self.defered_sync_start, peer.mid))
+            if self.settings.security_mode == SecurityMode.VANILLA:
+                self.periodic_sync_lc[peer.mid] = self.register_task("sync_" + str(peer.mid),
+                                                                     LoopingCall(self.trustchain_sync, peer.mid))
+                self.register_anonymous_task("sync_start_" + str(peer.mid),
+                                             reactor.callLater(self.settings.intro_run +
+                                                               self.settings.sync_time * random.random(),
+                                                               self.defered_sync_start, peer.mid))
+            elif self.settings.security_mode == SecurityMode.PASSIVE:
+                # Periodically challenge a peer with an audit and send to the peer the audit result
 
         # Check if we have pending crawl requests for this peer
         has_intro_crawl = self.request_cache.has(u"introcrawltimeout", IntroCrawlTimeout.get_number_for(peer))

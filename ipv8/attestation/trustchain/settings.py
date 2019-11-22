@@ -1,3 +1,15 @@
+from enum import Enum
+
+
+class SecurityMode(Enum):
+    """
+    Implementations of security implementations of Trustchain
+    """
+    VANILLA = 1
+    ACTIVE = 2
+    PASSIVE = 3
+
+
 class TrustChainSettings(object):
     """
     This class holds various settings regarding TrustChain.
@@ -33,9 +45,12 @@ class TrustChainSettings(object):
 
         # Id of the peer
         self.my_id = 1
-        
+
         # Sub-community introduction time in seconds 
         self.intro_run = 100
-        
+
         # Sync round time in seconds 
         self.sync_time = 1
+
+        # Security mode
+        self.security_mode = SecurityMode.VANILLA
