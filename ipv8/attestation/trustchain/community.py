@@ -911,7 +911,7 @@ class TrustChainCommunity(Community):
         # Need to convince peer with minimum number of blocks send
         # Get latest pairwise blocks/ including self claims
         my_key = self.my_peer.public_key.key_to_bin()
-        my_id = self.persistence.int_to_id(my_key)
+        my_id = self.persistence.key_to_id(my_key)
         peer_id = self.persistence.int_to_id(payload.crawl_id)
         if peer_id != my_id:
             self.logger.error("Peer requests not my peer status %s", peer_id)
