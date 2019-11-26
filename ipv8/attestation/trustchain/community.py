@@ -648,14 +648,13 @@ class TrustChainCommunity(Community):
             if not should_sign:
                 self.logger.info("Not signing block %s", blk)
                 return succeed(None)
-
+            #   or (self.persistence.get_last_seq_num(peer_id) < blk.sequence_number
+            #    and random.random() > self.settings.risk)
             peer_id = self.persistence.key_to_id(blk.public_key)
             if blk.type == b'spend':
-                if self.persistence.get_balance(peer_id) < 0 \
-                        or (self.persistence.get_last_seq_num(peer_id) < blk.sequence_number
-                            and random.random() > self.settings.risk):
+                if self.persistence.get_balance(peer_id) < 0:
                     crawl_deferred = self.validate_claims(blk, peer)
-                    return addCallback(crawl_deferred, lambda proofs: self.validate_audit_proofs(proofs, blk, peer))
+                    return addCallback(crawl_deferred, lambda _: self.process_half_block(blk, peer))
                 if 'condition' in blk.transaction:
                     pub_key = unhexlify(blk.transaction['condition'])
                     if self.my_peer.public_key.key_to_bin() != pub_key:
@@ -692,7 +691,13 @@ class TrustChainCommunity(Community):
         crawl_id = self.persistence.id_to_int(from_peer)
         if not self.request_cache.has(u"crawl", crawl_id):
             # Need to get more information from the peer to verify the claim
-            return self.send_audit_proofs_request(peer, last_block.sequence_number, crawl_id)
+            # except_pack = orjson.dumps(list(self.persistence.get_known_chains(from_peer)))
+            # self.send_audit_proofs_request(peer, last_block.sequence_number, crawl_id)
+            self.logger.info("Request the peer status %s:%s", crawl_id, last_block.sequence_number)
+            except_pack = orjson.dumps(list())
+            crawl_deferred = self.send_peer_crawl_request(crawl_id, peer,
+                                                          last_block.sequence_number, except_pack)
+            return crawl_deferred
         else:
             return self.request_cache.get(u'crawl', crawl_id).crawl_deferred
 
