@@ -697,13 +697,14 @@ class TrustChainCommunity(Community):
             return self.request_cache.get(u'crawl', crawl_id).crawl_deferred
 
     def validate_audit_proofs(self, proofs, block, peer):
+        self.logger.info("Received audit proofs for block %s", block)
         p1 = orjson.loads(proofs[0])
         p2 = orjson.loads(proofs[1])
         if 'spends' in p1:
-            status = p1
+            status = proofs[0]
             audits = p2
         elif 'spends' in p2:
-            status = p2
+            status = proofs[1]
             audits = p1
         else:
             self.logger.error("Audits proofs are illformed")
@@ -711,7 +712,7 @@ class TrustChainCommunity(Community):
 
         for v in audits.items():
             if not self.verify_audit(status, v):
-                self.logger.error("Received not valid audit %s %s", v,
+                self.logger.error("Audit did not validate %s %s", v,
                                   status)
 
         peer_id = self.persistence.key_to_id(block.public_key)
