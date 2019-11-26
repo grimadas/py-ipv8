@@ -1216,6 +1216,7 @@ class TrustChainCommunity(Community):
                                                                  LoopingCall(task, peer.mid))
             self.register_anonymous_task("sync_start_" + str(peer.mid),
                                          reactor.callLater(self.settings.intro_run +
+                                                           self.settings.sync_time *
                                                            self.settings.sync_time * random.random(),
                                                            self.defered_sync_start, peer.mid))
 
