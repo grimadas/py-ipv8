@@ -685,7 +685,7 @@ class TrustChainCommunity(Community):
                 return self.sign_block(peer, linked=blk, block_type=b'claim')
 
         # determine if we want to sign this block
-        return addCallback(maybeDeferred(self.should_sign, blk), on_should_sign_outcome)
+        return addCallback(self.should_sign(blk), on_should_sign_outcome)
 
     def validate_claims(self, last_block, peer):
         from_peer = self.persistence.key_to_id(last_block.public_key)
@@ -722,6 +722,7 @@ class TrustChainCommunity(Community):
         return self.process_half_block(block, peer)
 
     def finalize_audits(self, audit_seq, status, audits):
+        self.logger.info("Audit with seq number %s finalized", audit_seq)
         full_audit = dict(audits)
         packet = orjson.dumps(full_audit)
         # Update database audit proofs
@@ -835,6 +836,7 @@ class TrustChainCommunity(Community):
         """
         Send audit proofs
         """
+        self.logger.info("Sending audit prof %s to %s", audit_id, address)
         global_time = self.claim_global_time()
         payload = PeerCrawlResponsePayload(audit_id, audit_proofs).to_pack_list()
         dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
