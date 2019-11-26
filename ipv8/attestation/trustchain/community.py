@@ -910,9 +910,13 @@ class TrustChainCommunity(Community):
     def received_peer_crawl_request(self, peer, dist, payload: PeerCrawlRequestPayload):
         # Need to convince peer with minimum number of blocks send
         # Get latest pairwise blocks/ including self claims
+        my_key = self.my_peer.public_key.key_to_bin()
+        my_id = self.persistence.int_to_id(my_key)
         peer_id = self.persistence.int_to_id(payload.crawl_id)
+        if peer_id != my_id:
+            self.logger.error("Peer requests not my peer status %s", peer_id)
         pack_except = set(orjson.loads(payload.pack_except))
-        s1 = self.form_peer_status_response(peer_id)
+        s1 = self.form_peer_status_response(my_key)
         self.logger.info("Received peer crawl from node %s for range, sending status len %s",
                          hexlify(peer.public_key.key_to_bin())[-8:], len(s1))
         self.send_peer_crawl_response(peer, payload.crawl_id, s1)
