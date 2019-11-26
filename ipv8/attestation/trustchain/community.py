@@ -718,19 +718,20 @@ class TrustChainCommunity(Community):
         peer_id = self.persistence.key_to_id(block.public_key)
         # Put audit status into the local db
         res = self.persistence.dump_peer_status(peer_id, status)
-        self.persistence.add_peer_proofs(peer_id, status['seq_num'], orjson.dumps(audits))
+        # self.persistence.add_peer_proofs(peer_id, status['seq_num'],  orjson.dumps(audits))
         return self.process_half_block(block, peer)
 
     def finalize_audits(self, audit_seq, status, audits):
         full_audit = dict(audits)
+        packet = orjson.dumps(full_audit)
         # Update database audit proofs
         my_id = self.persistence.key_to_id(self.my_peer.public_key.key_to_bin())
-        self.persistence.add_peer_proofs(my_id, audit_seq, orjson.dumps(full_audit))
+        self.persistence.add_peer_proofs(my_id, audit_seq, status, packet)
         # Get peers requested
         for seq, peers_val in list(self.audit_requests.items()):
             if seq <= audit_seq:
                 for p, audit_id in peers_val:
-                    self.send_audit_proofs(p, audit_id, orjson.dumps(full_audit))
+                    self.send_audit_proofs(p, audit_id, packet)
                     self.send_audit_proofs(p, audit_id, status)
                 del self.audit_requests[seq]
 
@@ -776,19 +777,21 @@ class TrustChainCommunity(Community):
     def received_audit_proofs_request(self, source_address, dist, payload: PeerCrawlRequestPayload, data):
         # get last collected audit proof
         my_id = self.persistence.key_to_id(self.my_peer.public_key.key_to_bin())
-        proofs = self.persistence.get_peer_proofs(my_id, int(payload.seq_num))
+        seq_num, status, proofs = self.persistence.get_peer_proofs(my_id, int(payload.seq_num))
         if proofs:
-            # Send audit proofs
+            # There is an audit request peer can answer
             self.send_audit_proofs(source_address, payload.crawl_id, proofs)
+            self.send_audit_proofs(source_address, payload.crawl_id, status)
         else:
-            # Add to audit request cache
+            # There is no ready audit. Remember and answer later
             if payload.seq_num not in self.audit_requests:
                 self.audit_requests[payload.seq_num] = []
             self.audit_requests[payload.seq_num].append((source_address, payload.crawl_id))
 
     def send_audit_proofs_request(self, peer, seq_num, audit_id):
         """
-        Send a crawl request to a specific peer.
+        Send an audit proof for the peer;
+        Expect status and audit proofs for the status
         """
         crawl_deferred = Deferred()
         self.request_cache.add(CrawlRequestCache(self, audit_id, crawl_deferred, total_blocks=2))
@@ -812,10 +815,10 @@ class TrustChainCommunity(Community):
                 status = cache.added['status']
                 # TODO: if audit not valid/resend with bigger peer set
                 for v in audit.items():
-                    if not self.verify_audit(status, v):
-                        self.logger.error("Received not valid audit %s %s", audit,
-                                          payload.crawl_id)
                     cache.received_block(v)
+                    # if not self.verify_audit(status, v):
+                    #    self.logger.error("Received not valid audit %s %s", audit,
+                    #                      payload.crawl_id)
             else:
                 # Status is unknown - request status from the collector
                 cache.received_block(payload.chain)
