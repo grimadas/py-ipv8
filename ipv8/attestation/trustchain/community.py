@@ -777,8 +777,9 @@ class TrustChainCommunity(Community):
     def received_audit_proofs_request(self, source_address, dist, payload: PeerCrawlRequestPayload, data):
         # get last collected audit proof
         my_id = self.persistence.key_to_id(self.my_peer.public_key.key_to_bin())
-        seq_num, status, proofs = self.persistence.get_peer_proofs(my_id, int(payload.seq_num))
-        if proofs:
+        pack = self.persistence.get_peer_proofs(my_id, int(payload.seq_num))
+        if pack:
+            seq_num, status, proofs = pack
             # There is an audit request peer can answer
             self.send_audit_proofs(source_address, payload.crawl_id, proofs)
             self.send_audit_proofs(source_address, payload.crawl_id, status)
