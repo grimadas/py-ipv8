@@ -152,7 +152,7 @@ class TestTrustChainBlock(unittest.TestCase):
         prev = TestBlock()
         prev.sequence_number = GENESIS_SEQ
         db.add_block(prev)
-        block = TrustChainBlock.create(b'test', {b'id': 42}, db, prev.public_key, link=None)
+        block = TrustChainBlock.create(b'test', {'id': 42}, db, prev.public_key, link=None)
         self.assertEqual(block.previous_hash, prev.hash)
         self.assertEqual(block.sequence_number, 2)
         self.assertEqual(block.public_key, prev.public_key)
@@ -165,7 +165,7 @@ class TestTrustChainBlock(unittest.TestCase):
         db = MockDatabase()
         link = TestBlock()
         db.add_block(link)
-        block = TrustChainBlock.create(b'test', {b'id': 42}, db, key.pub().key_to_bin(), link=link)
+        block = TrustChainBlock.create(b'test', {'id': 42}, db, key.pub().key_to_bin(), link=link)
         self.assertEqual(block.previous_hash, GENESIS_HASH)
         self.assertEqual(block.sequence_number, GENESIS_SEQ)
         self.assertEqual(block.public_key, key.pub().key_to_bin())

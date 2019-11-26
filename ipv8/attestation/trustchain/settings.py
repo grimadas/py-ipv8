@@ -6,8 +6,7 @@ class SecurityMode(Enum):
     Implementations of security implementations of Trustchain
     """
     VANILLA = 1
-    ACTIVE = 2
-    PASSIVE = 3
+    AUDIT = 2
 
 
 class TrustChainSettings(object):
@@ -54,3 +53,9 @@ class TrustChainSettings(object):
 
         # Security mode
         self.security_mode = SecurityMode.VANILLA
+
+        # Security epsilon
+        self.com_size = 5
+
+        # Tolerated inconsistency risk
+        self.risk = 0.5

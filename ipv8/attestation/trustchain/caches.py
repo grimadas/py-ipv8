@@ -126,22 +126,24 @@ class CrawlRequestCache(NumberCache):
     """
     CRAWL_TIMEOUT = 20.0
 
-    def __init__(self, community, crawl_id, crawl_deferred, peer_id=None):
+    def __init__(self, community, crawl_id, crawl_deferred, peer_id=None, total_blocks=None, **kwargs):
         super(CrawlRequestCache, self).__init__(community.request_cache, u"crawl", crawl_id)
         self.logger = logging.getLogger(self.__class__.__name__)
         self.community = community
         self.crawl_deferred = crawl_deferred
         self.received_half_blocks = []
-        self.total_half_blocks_expected = maximum_integer
+        self.total_half_blocks_expected = total_blocks if total_blocks else maximum_integer
         self.peer_id = peer_id
+        self.added = kwargs
 
     @property
     def timeout_delay(self):
         return CrawlRequestCache.CRAWL_TIMEOUT
 
-    def received_block(self, block, total_count):
+    def received_block(self, block, total_count=None):
         self.received_half_blocks.append(block)
-        self.total_half_blocks_expected = total_count
+        if total_count:
+            self.total_half_blocks_expected = total_count
 
         if self.total_half_blocks_expected == 0:
             self.community.request_cache.pop(u"crawl", self.number)

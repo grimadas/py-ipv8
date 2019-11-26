@@ -7,17 +7,16 @@ from __future__ import absolute_import
 
 import csv
 import logging
-import orjson
 import os
 import random
 import struct
 import time
-from base64 import b64encode, b64decode
 from binascii import hexlify, unhexlify
 from functools import wraps
 from threading import RLock
 
 import networkx as nx
+import orjson
 from twisted.internet import reactor
 from twisted.internet.defer import Deferred, fail, inlineCallbacks, maybeDeferred, returnValue, succeed
 from twisted.internet.task import LoopingCall
@@ -30,6 +29,7 @@ from .database import TrustChainDB
 from .payload import *
 from ...attestation.trustchain.settings import TrustChainSettings, SecurityMode
 from ...community import Community
+from ...keyvault.crypto import default_eccrypto
 from ...lazy_community import lazy_wrapper, lazy_wrapper_unsigned, lazy_wrapper_unsigned_wd
 from ...messaging.payload_headers import BinMemberAuthenticationPayload, GlobalTimeDistributionPayload
 from ...peer import Peer
@@ -102,6 +102,8 @@ class TrustChainCommunity(Community):
         self.pex = {}
         self.pex_map = {}
         self.bootstrap_master = None
+        self.audit_requests = {}
+        self.minters = set()
 
         self.decode_map.update({
             chr(1): self.received_half_block,
@@ -113,12 +115,9 @@ class TrustChainCommunity(Community):
             chr(7): self.received_empty_crawl_response,
             chr(8): self.received_peer_crawl_request,
             chr(9): self.received_peer_crawl_response,
+            chr(10): self.received_audit_proofs,
+            chr(11): self.received_audit_proofs_request
         })
-
-    def prepare_entangle(self):
-        # Get last balance of all known peers
-        pass
-
 
     def init_mem_db_flush(self, flush_time):
         if not self.mem_db_flush_lc:
@@ -128,7 +127,7 @@ class TrustChainCommunity(Community):
     def mem_db_flush(self):
         self.persistence.commit_block_times()
 
-    def trustchain_vanilla_sync(self, peer_mid):
+    def trustchain_sync(self, peer_mid):
         self.logger.info("Sync for the info peer  %s", peer_mid)
         blk = self.persistence.get_latest_peer_block(peer_mid)
         val = self.ipv8.overlays[self.pex_map[peer_mid]].get_peers()
@@ -141,26 +140,6 @@ class TrustChainCommunity(Community):
             if blk:
                 self.send_block_pair(blk[0], blk[1], address_set=val)
 
-
-    def choose_community_peers(self, peer_mid, current_seed, commitee_size):
-        val = self.ipv8.overlays[self.pex_map[peer_mid]].get_peers()
-        random.seed(current_seed)
-        return random.sample(val, commitee_size)
-
-
-    def choose_audit_commitee(self):
-        # Get the last block
-        hash = self.persistence.get_latest(self.my_peer.public_key.key_to_bin()).hash
-
-
-
-    def trustchain_active_sync(self, peer_mid):
-        pass
-
-
-    def trustchain_passive_sync(self, peer_mid):
-        pass
-
     def get_hop_to_peer(self, peer_pub_key):
         """
         Get next hop to peer
@@ -171,6 +150,11 @@ class TrustChainCommunity(Community):
         if p:
             # Directly connected
             return p
+        # Check if peer is part of any known community
+        for p in self.get_all_communities_peers():
+            if peer_pub_key == p.public_key.key_to_bin():
+                self.logger.info("Choosing peer from community")
+                return p
         # Look in the known_graph the path to the peer
         if not self.known_graph:
             self.logger.error("World graph is not known")
@@ -182,7 +166,7 @@ class TrustChainCommunity(Community):
                 paths = list(nx.all_shortest_paths(self.known_graph, source=source, target=target))
                 random_path = random.choice(paths)
                 if len(random_path) < 2:
-                    self.logger.error("Path to key %s is less than 2 %s",peer_pub_key, str(random_path))
+                    self.logger.error("Path to key %s is less than 2 %s", peer_pub_key, str(random_path))
                 else:
                     # Choose random path
                     p = self.get_peer_by_pub_key(random_path[1])
@@ -549,7 +533,7 @@ class TrustChainCommunity(Community):
                 fanout = self.settings.broadcast_fanout - 1
                 self.informed_send_block(block, ttl=payload.ttl, fanout=fanout)
             else:
-                reactor.callLater(0.5 * random.random(), self.send_block, block, ttl=payload.ttl)
+                self.send_block(block, ttl=payload.ttl)
 
     @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, HalfBlockPairPayload)
     def received_half_block_pair(self, source_address, dist, payload):
@@ -561,19 +545,6 @@ class TrustChainCommunity(Community):
         peer = Peer(payload.public_key, source_address)
         self.validate_persist_block(block1, peer)
         self.validate_persist_block(block2, peer)
-
-    def validate_claims(self, last_block, peer):
-        from_peer = self.persistence.key_to_id(last_block.public_key)
-        crawl_id = self.persistence.id_to_int(from_peer)
-        if not self.request_cache.has(u"crawl", crawl_id):
-            # Need to get more information from the peer to verify the claim
-            # except_pack = orjson.dumps(list(self.persistence.get_known_chains(from_peer)))
-            except_pack = orjson.dumps(list())
-            crawl_deferred = self.send_peer_crawl_request(crawl_id, peer,
-                                                          last_block.sequence_number, except_pack)
-            return crawl_deferred
-        else:
-            return self.request_cache.get(u'crawl', crawl_id).crawl_deferred
 
     @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, HalfBlockPairBroadcastPayload)
     def received_half_block_pair_broadcast(self, source_address, dist, payload):
@@ -680,9 +651,11 @@ class TrustChainCommunity(Community):
 
             peer_id = self.persistence.key_to_id(blk.public_key)
             if blk.type == b'spend':
-                if self.persistence.get_balance(peer_id) < 0:
+                if self.persistence.get_balance(peer_id) < 0 \
+                        or (self.persistence.get_last_seq_num(peer_id) < blk.sequence_number
+                            and random.random() > self.settings.risk):
                     crawl_deferred = self.validate_claims(blk, peer)
-                    return addCallback(crawl_deferred, lambda _: self.process_half_block(blk, peer))
+                    return addCallback(crawl_deferred, lambda proofs: self.validate_audit_proofs(proofs, blk, peer))
                 if 'condition' in blk.transaction:
                     pub_key = unhexlify(blk.transaction['condition'])
                     if self.my_peer.public_key.key_to_bin() != pub_key:
@@ -712,7 +685,174 @@ class TrustChainCommunity(Community):
                 return self.sign_block(peer, linked=blk, block_type=b'claim')
 
         # determine if we want to sign this block
-        return addCallback(self.should_sign(blk), on_should_sign_outcome)
+        return addCallback(maybeDeferred(self.should_sign, blk), on_should_sign_outcome)
+
+    def validate_claims(self, last_block, peer):
+        from_peer = self.persistence.key_to_id(last_block.public_key)
+        crawl_id = self.persistence.id_to_int(from_peer)
+        if not self.request_cache.has(u"crawl", crawl_id):
+            # Need to get more information from the peer to verify the claim
+            return self.send_audit_proofs_request(peer, last_block.sequence_number, crawl_id)
+        else:
+            return self.request_cache.get(u'crawl', crawl_id).crawl_deferred
+
+    def validate_audit_proofs(self, proofs, block, peer):
+        p1 = orjson.loads(proofs[0])
+        p2 = orjson.loads(proofs[1])
+        if 'spends' in p1:
+            status = p1
+            audits = p2
+        elif 'spends' in p2:
+            status = p2
+            audits = p1
+        else:
+            self.logger.error("Audits proofs are illformed")
+            return False
+
+        for v in audits.items():
+            if not self.verify_audit(status, v):
+                self.logger.error("Received not valid audit %s %s", v,
+                                  status)
+
+        peer_id = self.persistence.key_to_id(block.public_key)
+        # Put audit status into the local db
+        res = self.persistence.dump_peer_status(peer_id, status)
+        self.persistence.add_peer_proofs(peer_id, status['seq_num'], orjson.dumps(audits))
+        return self.process_half_block(block, peer)
+
+    def finalize_audits(self, audit_seq, status, audits):
+        full_audit = dict(audits)
+        # Update database audit proofs
+        my_id = self.persistence.key_to_id(self.my_peer.public_key.key_to_bin())
+        self.persistence.add_peer_proofs(my_id, audit_seq, orjson.dumps(full_audit))
+        # Get peers requested
+        for seq, peers_val in list(self.audit_requests.items()):
+            if seq <= audit_seq:
+                for p, audit_id in peers_val:
+                    self.send_audit_proofs(p, audit_id, orjson.dumps(full_audit))
+                    self.send_audit_proofs(p, audit_id, status)
+                del self.audit_requests[seq]
+
+    def trustchain_active_sync(self, community_mid):
+        # choose the peers
+        self.logger.info("Active Sync asking in the community  %s", community_mid)
+        # Get the peer list for the community
+        peer_list = self.ipv8.overlays[self.pex_map[community_mid]].get_peers()
+        # Get own last block in the community
+        peer_key = self.my_peer.public_key.key_to_bin()
+        block = self.persistence.get_latest(peer_key)
+        if not block:
+            self.logger.error("Peer has no block for audit. Skipping audit for now.")
+            return
+        seq_num = block.sequence_number
+        seed = peer_key + bytes(seq_num)
+        selected_peers = self.choose_community_peers(peer_list, seed, min(self.settings.com_size, len(peer_list)))
+
+        s1 = self.form_peer_status_response(peer_key)
+        # Send an audit request for the block + seq num
+        # Now we send status + seq_num
+        crawl_id = self.persistence.id_to_int(self.persistence.key_to_id(peer_key))
+        crawl_id = int(str(crawl_id) + str(seq_num))
+        # Check if there are active crawl requests for this sequence number
+        if not self.request_cache.get(u'crawl', crawl_id):
+            crawl_deferred = Deferred()
+            self.request_cache.add(CrawlRequestCache(self, crawl_id, crawl_deferred,
+                                                     total_blocks=len(selected_peers), status=s1))
+            self.logger.info("Requesting an audit from %s peers", len(selected_peers))
+            peer_addresses = []
+            for peer in selected_peers:
+                self.send_peer_crawl_response(peer, crawl_id, s1)
+                peer_addresses.append(peer_addresses)
+            # when enough audits received, finalize
+            return addCallback(crawl_deferred, lambda audits: self.finalize_audits(seq_num, s1, audits))
+
+    def choose_community_peers(self, com_peers, current_seed, commitee_size):
+        random.seed(current_seed)
+        return random.sample(com_peers, commitee_size)
+
+    @synchronized
+    @lazy_wrapper_unsigned_wd(GlobalTimeDistributionPayload, PeerCrawlRequestPayload)
+    def received_audit_proofs_request(self, source_address, dist, payload: PeerCrawlRequestPayload, data):
+        # get last collected audit proof
+        my_id = self.persistence.key_to_id(self.my_peer.public_key.key_to_bin())
+        proofs = self.persistence.get_peer_proofs(my_id, int(payload.seq_num))
+        if proofs:
+            # Send audit proofs
+            self.send_audit_proofs(source_address, payload.crawl_id, proofs)
+        else:
+            # Add to audit request cache
+            if payload.seq_num not in self.audit_requests:
+                self.audit_requests[payload.seq_num] = []
+            self.audit_requests[payload.seq_num].append((source_address, payload.crawl_id))
+
+    def send_audit_proofs_request(self, peer, seq_num, audit_id):
+        """
+        Send a crawl request to a specific peer.
+        """
+        crawl_deferred = Deferred()
+        self.request_cache.add(CrawlRequestCache(self, audit_id, crawl_deferred, total_blocks=2))
+
+        global_time = self.claim_global_time()
+        payload = PeerCrawlRequestPayload(seq_num, audit_id, orjson.dumps(list())).to_pack_list()
+        dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
+
+        packet = self._ez_pack(self._prefix, 11, [dist, payload], False)
+        self.endpoint.send(peer.address, packet)
+        return crawl_deferred
+
+    @synchronized
+    @lazy_wrapper_unsigned_wd(GlobalTimeDistributionPayload, PeerCrawlResponsePayload)
+    def received_audit_proofs(self, source_address, dist, payload, data):
+        cache = self.request_cache.get(u"crawl", payload.crawl_id)
+        if cache:
+            if 'status' in cache.added:
+                # status is known => This is audit collection initiated by my peer
+                audit = orjson.loads(payload.chain)
+                status = cache.added['status']
+                # TODO: if audit not valid/resend with bigger peer set
+                for v in audit.items():
+                    if not self.verify_audit(status, v):
+                        self.logger.error("Received not valid audit %s %s", audit,
+                                          payload.crawl_id)
+                    cache.received_block(v)
+            else:
+                # Status is unknown - request status from the collector
+                cache.received_block(payload.chain)
+
+    def verify_audit(self, status, audit):
+        # This is a claim of a conditional transaction
+        pub_key = default_eccrypto.key_from_public_bin(unhexlify(audit[0]))
+        sign = unhexlify(audit[1])
+
+        return default_eccrypto.is_valid_signature(pub_key, status, sign)
+
+    def send_audit_proofs(self, address, audit_id, audit_proofs):
+        """
+        Send audit proofs
+        """
+        global_time = self.claim_global_time()
+        payload = PeerCrawlResponsePayload(audit_id, audit_proofs).to_pack_list()
+        dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
+
+        packet = self._ez_pack(self._prefix, 10, [dist, payload], False)
+        self.endpoint.send(address, packet)
+
+    def perform_audit(self, source_address, audit_request):
+        peer_id = self.persistence.int_to_id(audit_request.crawl_id)
+        # Put audit status into the local db
+        peer_status = orjson.loads(audit_request.chain)
+        res = self.persistence.dump_peer_status(peer_id, peer_status)
+        if res:
+            # Create an audit proof for the this sequence
+            sign = default_eccrypto.create_signature(self.my_peer.key, audit_request.chain)
+            # create an audit proof
+            audit = {}
+            my_id = hexlify(self.my_peer.public_key.key_to_bin()).decode()
+            audit[my_id] = hexlify(sign).decode()
+            self.send_audit_proofs(source_address, audit_request.crawl_id, orjson.dumps(audit))
+        else:
+            # This is invalid audit request, refusing to sign
+            self.logger.error("Received invalid audit request id %s", audit_request.crawl_id)
 
     @synchronized
     @lazy_wrapper(GlobalTimeDistributionPayload, PeerCrawlResponsePayload)
@@ -724,12 +864,19 @@ class TrustChainCommunity(Community):
             self.logger.info("Dump chain for %s, balance before is %s", peer_id, self.persistence.get_balance(peer_id))
             res = self.persistence.dump_peer_status(peer_id, orjson.loads(payload.chain))
             self.logger.info("Dump chain for %s, balance after is %s", peer_id, self.persistence.get_balance(peer_id))
-            if res:
-                cache.received_block(1, 1)
-            else:
-                cache.received_empty_response()
+            cache.received_empty_response()
         else:
             self.logger.error("Received peer crawl with unknown crawl id %s", payload.crawl_id)
+            # Might be an active audit request -> verify the status/send chain tests
+            self.perform_audit(peer.address, payload)
+
+    def get_all_communities_peers(self):
+        peers = set()
+        for mid in self.pex:
+            val = self.ipv8.overlays[self.pex_map[mid]].get_peers()
+            if val:
+                peers.update(val)
+        return peers
 
     def send_peer_crawl_response(self, peer, crawl_id, chain):
         """
@@ -743,17 +890,17 @@ class TrustChainCommunity(Community):
         packet = self._ez_pack(self._prefix, 9, [auth, dist, payload])
         self.endpoint.send(peer.address, packet)
 
+    def form_peer_status_response(self, public_key):
+        return orjson.dumps(self.persistence.get_peer_status(public_key))
+
     @synchronized
     @lazy_wrapper(GlobalTimeDistributionPayload, PeerCrawlRequestPayload)
     def received_peer_crawl_request(self, peer, dist, payload: PeerCrawlRequestPayload):
-
         # Need to convince peer with minimum number of blocks send
         # Get latest pairwise blocks/ including self claims
-
         peer_id = self.persistence.int_to_id(payload.crawl_id)
         pack_except = set(orjson.loads(payload.pack_except))
-        status = self.persistence.get_peer_status(peer_id)
-        s1 = orjson.dumps(status)
+        s1 = self.form_peer_status_response(peer_id)
         self.logger.info("Received peer crawl from node %s for range, sending status len %s",
                          hexlify(peer.public_key.key_to_bin())[-8:], len(s1))
         self.send_peer_crawl_response(peer, payload.crawl_id, s1)
@@ -1038,10 +1185,10 @@ class TrustChainCommunity(Community):
 
         if peer.address in self.network.blacklist:  # Do not crawl addresses in our blacklist (trackers)
             return
-
+        known_minters = set(nx.get_node_attributes(self.known_graph, 'minter').keys())
         if not self.ipv8:
-            self.logger.error('No IPv8 service object available, cannot start PEXCommunity')
-        elif peer.mid not in self.pex:
+            self.logger.warning('No IPv8 service object available, cannot start PEXCommunity')
+        elif peer.public_key.key_to_bin() in known_minters and peer.mid not in self.pex:
             community = SubTrustCommunity(self.my_peer, self.ipv8.endpoint, Network(), mid=peer.mid)
             index = len(self.ipv8.overlays)
             self.ipv8.overlays.append(community)
@@ -1056,15 +1203,16 @@ class TrustChainCommunity(Community):
             else:
                 self.ipv8.strategies.append((RandomWalk(community, total_run=self.settings.intro_run), -1))
             # Start sync task after the discovery
-            if self.settings.security_mode == SecurityMode.VANILLA:
-                self.periodic_sync_lc[peer.mid] = self.register_task("sync_" + str(peer.mid),
-                                                                     LoopingCall(self.trustchain_sync, peer.mid))
-                self.register_anonymous_task("sync_start_" + str(peer.mid),
-                                             reactor.callLater(self.settings.intro_run +
-                                                               self.settings.sync_time * random.random(),
-                                                               self.defered_sync_start, peer.mid))
-            elif self.settings.security_mode == SecurityMode.PASSIVE:
-                # Periodically challenge a peer with an audit and send to the peer the audit result
+            task = self.trustchain_sync \
+                if self.settings.security_mode == SecurityMode.VANILLA \
+                else self.trustchain_active_sync
+
+            self.periodic_sync_lc[peer.mid] = self.register_task("sync_" + str(peer.mid),
+                                                                 LoopingCall(task, peer.mid))
+            self.register_anonymous_task("sync_start_" + str(peer.mid),
+                                         reactor.callLater(self.settings.intro_run +
+                                                           self.settings.sync_time * random.random(),
+                                                           self.defered_sync_start, peer.mid))
 
         # Check if we have pending crawl requests for this peer
         has_intro_crawl = self.request_cache.has(u"introcrawltimeout", IntroCrawlTimeout.get_number_for(peer))
