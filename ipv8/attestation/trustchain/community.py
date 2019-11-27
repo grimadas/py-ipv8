@@ -127,15 +127,16 @@ class TrustChainCommunity(Community):
     def mem_db_flush(self):
         self.persistence.commit_block_times()
 
-    def trustchain_sync(self, peer_mid):
-        self.logger.info("Sync for the info peer  %s", peer_mid)
-        blk = self.persistence.get_latest_peer_block(peer_mid)
-        val = self.ipv8.overlays[self.pex_map[peer_mid]].get_peers()
+    def trustchain_sync(self, community_id):
+        self.logger.info("Sync for the info peer  %s", community_id)
+        blk = self.persistence.get_latest_peer_block(community_id)
+        val = self.pex[community_id].get_peers()
+        # val = self.ipv8.overlays[self.pex_map[peer_mid]].get_peers()
         if blk:
             self.send_block(blk, address_set=val)
         # Send also the last pairwise block to the peers
-        if peer_mid in self.persistence.peer_map:
-            blk = self.persistence.get_last_pairwise_block(self.persistence.peer_map[peer_mid],
+        if community_id in self.persistence.peer_map:
+            blk = self.persistence.get_last_pairwise_block(self.persistence.peer_map[community_id],
                                                            self.my_peer.public_key.key_to_bin())
             if blk:
                 self.send_block_pair(blk[0], blk[1], address_set=val)
@@ -752,7 +753,7 @@ class TrustChainCommunity(Community):
         # choose the peers
         self.logger.info("Active Sync asking in the community  %s", community_mid)
         # Get the peer list for the community
-        peer_list = self.ipv8.overlays[self.pex_map[community_mid]].get_peers()
+        peer_list = self.pex[community_mid].get_peers()
         # Get own last block in the community
         peer_key = self.my_peer.public_key.key_to_bin()
         block = self.persistence.get_latest(peer_key)
@@ -893,7 +894,7 @@ class TrustChainCommunity(Community):
     def get_all_communities_peers(self):
         peers = set()
         for mid in self.pex:
-            val = self.ipv8.overlays[self.pex_map[mid]].get_peers()
+            val = self.pex[mid].get_peers()
             if val:
                 peers.update(val)
         return peers
@@ -1201,6 +1202,20 @@ class TrustChainCommunity(Community):
         for mid in self.pex:
             self.defered_sync_stop(mid)
 
+    def build_security_community(self, community_mid):
+        # Start sync task after the discovery
+        task = self.trustchain_sync \
+            if self.settings.security_mode == SecurityMode.VANILLA \
+            else self.trustchain_active_sync
+
+        self.periodic_sync_lc[community_mid] = self.register_task("sync_" + str(community_mid),
+                                                             LoopingCall(task, community_mid))
+        self.register_anonymous_task("sync_start_" + str(community_mid),
+                                     reactor.callLater(self.settings.intro_run +
+                                                       self.settings.sync_time *
+                                                       self.settings.sync_time * random.random(),
+                                                       self.defered_sync_start, community_mid))
+
     @synchronized
     def introduction_response_callback(self, peer, dist, payload):
         chain_length = None
@@ -1214,30 +1229,23 @@ class TrustChainCommunity(Community):
             self.logger.warning('No IPv8 service object available, cannot start PEXCommunity')
         elif peer.public_key.key_to_bin() in known_minters and peer.mid not in self.pex:
             community = SubTrustCommunity(self.my_peer, self.ipv8.endpoint, Network(), mid=peer.mid)
-            index = len(self.ipv8.overlays)
             self.ipv8.overlays.append(community)
             # Discover and connect to everyone for 50 seconds
-            #
             self.pex[peer.mid] = community
-            self.pex_map[peer.mid] = index
+            # index = len(self.ipv8.overlays)
+            # self.pex_map[peer.mid] = index
             if self.bootstrap_master:
                 self.logger.info('Proceed with a bootstrap master')
                 for k in self.bootstrap_master:
                     community.walk_to(k)
             else:
                 self.ipv8.strategies.append((RandomWalk(community, total_run=self.settings.intro_run), -1))
-            # Start sync task after the discovery
-            task = self.trustchain_sync \
-                if self.settings.security_mode == SecurityMode.VANILLA \
-                else self.trustchain_active_sync
+            self.build_security_community(peer.mid)
 
-            self.periodic_sync_lc[peer.mid] = self.register_task("sync_" + str(peer.mid),
-                                                                 LoopingCall(task, peer.mid))
-            self.register_anonymous_task("sync_start_" + str(peer.mid),
-                                         reactor.callLater(self.settings.intro_run +
-                                                           self.settings.sync_time *
-                                                           self.settings.sync_time * random.random(),
-                                                           self.defered_sync_start, peer.mid))
+        # Own peer is a minter/ other peers will connect to us.
+        if self.my_peer.public_key.key_to_bin() in known_minters and self.my_peer.mid not in self.pex:
+            self.pex[self.my_peer.mid] = self
+            self.build_security_community(self.my_peer.mid)
 
         # Check if we have pending crawl requests for this peer
         has_intro_crawl = self.request_cache.has(u"introcrawltimeout", IntroCrawlTimeout.get_number_for(peer))
