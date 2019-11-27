@@ -655,7 +655,7 @@ class TrustChainCommunity(Community):
             #    and random.random() > self.settings.risk)
             peer_id = self.persistence.key_to_id(blk.public_key)
             if blk.type == b'spend':
-                if self.persistence.get_balance(peer_id) < 0:
+                if self.persistence.get_balance(peer_id) < 0 or (not proofs and random.random() > self.settings.risk):
                     crawl_deferred = self.validate_claims(blk, peer)
                     return addCallback(crawl_deferred, lambda audit_proofs: self.process_half_block(blk, peer,
                                                                                                     audit_proofs))
