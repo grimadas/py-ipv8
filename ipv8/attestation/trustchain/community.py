@@ -753,22 +753,19 @@ class TrustChainCommunity(Community):
         seq_num = block.sequence_number
         seed = peer_key + bytes(seq_num)
         selected_peers = self.choose_community_peers(peer_list, seed, min(self.settings.com_size, len(peer_list)))
-
         s1 = self.form_peer_status_response(peer_key)
         # Send an audit request for the block + seq num
         # Now we send status + seq_num
         crawl_id = self.persistence.id_to_int(self.persistence.key_to_id(peer_key))
-        crawl_id = int(str(crawl_id) + str(seq_num))
+        # crawl_id = int(str(crawl_id))
         # Check if there are active crawl requests for this sequence number
         if not self.request_cache.get(u'crawl', crawl_id):
             crawl_deferred = Deferred()
             self.request_cache.add(CrawlRequestCache(self, crawl_id, crawl_deferred,
                                                      total_blocks=len(selected_peers), status=s1))
             self.logger.info("Requesting an audit from %s peers", len(selected_peers))
-            peer_addresses = []
             for peer in selected_peers:
                 self.send_peer_crawl_response(peer, crawl_id, s1)
-                peer_addresses.append(peer_addresses)
             # when enough audits received, finalize
             return addCallback(crawl_deferred, lambda audits: self.finalize_audits(seq_num, s1, audits))
 
@@ -869,18 +866,18 @@ class TrustChainCommunity(Community):
     def received_peer_crawl_response(self, peer, dist, payload: PeerCrawlResponsePayload):
 
         cache = self.request_cache.get(u"crawl", payload.crawl_id)
+        peer_id = self.persistence.int_to_id(payload.crawl_id)
+        prev_balance = self.persistence.get_balance(peer_id)
+        self.logger.info("Dump chain for %s, balance before is %s", peer_id, prev_balance)
+        res = self.persistence.dump_peer_status(peer_id, orjson.loads(payload.chain))
+        after_balance = self.persistence.get_balance(peer_id)
+        self.logger.info("Dump chain for %s, balance after is %s", peer_id, after_balance)
+        if after_balance < 0:
+            self.logger.error("Balance if still negative!  %s", orjson.loads(payload.chain))
         if cache:
-            peer_id = self.persistence.int_to_id(payload.crawl_id)
-            prev_balance = self.persistence.get_balance(peer_id)
-            self.logger.info("Dump chain for %s, balance before is %s", peer_id, prev_balance)
-            res = self.persistence.dump_peer_status(peer_id, orjson.loads(payload.chain))
-            after_balance = self.persistence.get_balance(peer_id)
-            self.logger.info("Dump chain for %s, balance after is %s", peer_id, after_balance)
-            if after_balance < 0:
-                self.logger.error("Balance if still negative!  %s", orjson.loads(payload.chain))
             cache.received_empty_response()
         else:
-            self.logger.error("Received peer crawl with unknown crawl id %s", payload.crawl_id)
+            self.logger.error("Received peer crawl with unknown crawl id/Performing audit %s", payload.crawl_id)
             # Might be an active audit request -> verify the status/send chain tests
             self.perform_audit(peer.address, payload)
 
