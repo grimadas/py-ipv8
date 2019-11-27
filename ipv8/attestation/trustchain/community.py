@@ -1216,6 +1216,12 @@ class TrustChainCommunity(Community):
                                                        self.settings.sync_time * random.random(),
                                                        self.defered_sync_start, community_mid))
 
+    def init_minter_community(self):
+        if self.my_peer.mid not in self.pex:
+            self.logger.info('Creating own minter community')
+            self.pex[self.my_peer.mid] = self
+            self.build_security_community(self.my_peer.mid)
+
     @synchronized
     def introduction_response_callback(self, peer, dist, payload):
         chain_length = None
@@ -1242,12 +1248,6 @@ class TrustChainCommunity(Community):
                 self.ipv8.strategies.append((RandomWalk(community, total_run=self.settings.intro_run), -1))
             self.build_security_community(peer.mid)
 
-        # Own peer is a minter/ other peers will connect to us.
-        self.logger.info('Minters: %s, me: %s', known_minters,  self.my_peer.public_key.key_to_bin())
-        if self.my_peer.public_key.key_to_bin() in known_minters and self.my_peer.mid not in self.pex:
-            self.logger.info('Join minter community')
-            self.pex[self.my_peer.mid] = self
-            self.build_security_community(self.my_peer.mid)
 
         # Check if we have pending crawl requests for this peer
         has_intro_crawl = self.request_cache.has(u"introcrawltimeout", IntroCrawlTimeout.get_number_for(peer))
