@@ -1243,6 +1243,7 @@ class TrustChainCommunity(Community):
             self.build_security_community(peer.mid)
 
         # Own peer is a minter/ other peers will connect to us.
+        self.logger.info('Minters: %s, me: %s', known_minters,  self.my_peer.public_key.key_to_bin())
         if self.my_peer.public_key.key_to_bin() in known_minters and self.my_peer.mid not in self.pex:
             self.logger.info('Join minter community')
             self.pex[self.my_peer.mid] = self
