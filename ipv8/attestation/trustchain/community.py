@@ -606,7 +606,7 @@ class TrustChainCommunity(Community):
             listener.received_block(block)
 
     @synchronized
-    def process_half_block(self, blk, peer):
+    def process_half_block(self, blk, peer, proofs=None):
         """
         Process a received half block.
         """
@@ -614,6 +614,10 @@ class TrustChainCommunity(Community):
         self.logger.info("Block validation result %s, %s, (%s)", validation[0], validation[1], blk)
         if not self.settings.ignore_validation and validation[0] == ValidationResult.invalid:
             return fail(RuntimeError("Block could not be validated: %s, %s" % (validation[0], validation[1])))
+        if proofs:
+            # validate proof for the block
+            if not self.validate_audit_proofs(proofs, blk, peer):
+                return fail(RuntimeError("Block proofs are not valid, refusing to sign: %s" % blk))
 
         # Check if we are waiting for this signature response
         # self.update_notify(blk)
@@ -652,7 +656,8 @@ class TrustChainCommunity(Community):
             if blk.type == b'spend':
                 if self.persistence.get_balance(peer_id) < 0:
                     crawl_deferred = self.validate_claims(blk, peer)
-                    return addCallback(crawl_deferred, lambda _: self.process_half_block(blk, peer))
+                    return addCallback(crawl_deferred, lambda audit_proofs: self.process_half_block(blk, peer,
+                                                                                                    audit_proofs))
                 if 'condition' in blk.transaction:
                     pub_key = unhexlify(blk.transaction['condition'])
                     if self.my_peer.public_key.key_to_bin() != pub_key:
@@ -690,11 +695,12 @@ class TrustChainCommunity(Community):
         if not self.request_cache.has(u"crawl", crawl_id):
             # Need to get more information from the peer to verify the claim
             # except_pack = orjson.dumps(list(self.persistence.get_known_chains(from_peer)))
-            # self.send_audit_proofs_request(peer, last_block.sequence_number, crawl_id)
-            self.logger.info("Request the peer status %s:%s", crawl_id, last_block.sequence_number)
+            #
+            self.logger.info("Request the peer status and audit proofs %s:%s", crawl_id, last_block.sequence_number)
             except_pack = orjson.dumps(list())
-            crawl_deferred = self.send_peer_crawl_request(crawl_id, peer,
-                                                          last_block.sequence_number, except_pack)
+            # crawl_deferred = self.send_peer_crawl_request(crawl_id, peer,
+            #                                              last_block.sequence_number, except_pack)
+            crawl_deferred = self.send_audit_proofs_request(peer, last_block.sequence_number, crawl_id)
             return crawl_deferred
         else:
             return self.request_cache.get(u'crawl', crawl_id).crawl_deferred
@@ -704,25 +710,28 @@ class TrustChainCommunity(Community):
         p1 = orjson.loads(proofs[0])
         p2 = orjson.loads(proofs[1])
         if 'spends' in p1:
-            status = proofs[0]
+            pack_stat = proofs[0]
+            status = p1
             audits = p2
         elif 'spends' in p2:
-            status = proofs[1]
+            pack_stat = proofs[1]
+            status = p2
             audits = p1
         else:
             self.logger.error("Audits proofs are illformed")
             return False
 
         for v in audits.items():
-            if not self.verify_audit(status, v):
+            if not self.verify_audit(pack_stat, v):
                 self.logger.error("Audit did not validate %s %s", v,
                                   status)
 
         peer_id = self.persistence.key_to_id(block.public_key)
         # Put audit status into the local db
         res = self.persistence.dump_peer_status(peer_id, status)
+        return res
         # self.persistence.add_peer_proofs(peer_id, status['seq_num'],  orjson.dumps(audits))
-        return self.process_half_block(block, peer)
+        # return self.process_half_block(block, peer)
 
     def finalize_audits(self, audit_seq, status, audits):
         self.logger.info("Audit with seq number %s finalized", audit_seq)
