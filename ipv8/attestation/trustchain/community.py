@@ -348,8 +348,6 @@ class TrustChainCommunity(Community):
                 f = min(len(self.get_peers()), self.settings.broadcast_fanout)
                 self.logger.debug("Broadcasting block in a main-channel  to %s peers", f)
                 peers = (p.address for p in random.sample(self.get_peers(), f))
-
-            peers = (p.address for p in random.sample(self.get_peers(), f))
             for p in peers:
                 self.endpoint.send(p, packet)
                 # self.register_anonymous_task("send_block",
