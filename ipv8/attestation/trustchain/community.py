@@ -699,15 +699,19 @@ class TrustChainCommunity(Community):
             #
             self.logger.info("Request the peer status and audit proofs %s:%s", crawl_id, last_block.sequence_number)
             except_pack = orjson.dumps(list())
-            # crawl_deferred = self.send_peer_crawl_request(crawl_id, peer,
-            #                                              last_block.sequence_number, except_pack)
-            crawl_deferred = self.send_audit_proofs_request(peer, last_block.sequence_number, crawl_id)
+            if self.settings.security_mode == SecurityMode.VANILLA:
+                crawl_deferred = self.send_peer_crawl_request(crawl_id, peer,
+                                                              last_block.sequence_number, except_pack)
+            else:
+                crawl_deferred = self.send_audit_proofs_request(peer, last_block.sequence_number, crawl_id)
             return crawl_deferred
         else:
             return self.request_cache.get(u'crawl', crawl_id).crawl_deferred
 
     def validate_audit_proofs(self, proofs, block, peer):
         self.logger.info("Received audit proofs for block %s", block)
+        if self.settings.security_mode == SecurityMode.VANILLA:
+            return True
         p1 = orjson.loads(proofs[0])
         p2 = orjson.loads(proofs[1])
         if 'spends' in p1:
@@ -1209,7 +1213,7 @@ class TrustChainCommunity(Community):
             else self.trustchain_active_sync
 
         self.periodic_sync_lc[community_mid] = self.register_task("sync_" + str(community_mid),
-                                                             LoopingCall(task, community_mid))
+                                                                  LoopingCall(task, community_mid))
         self.register_anonymous_task("sync_start_" + str(community_mid),
                                      reactor.callLater(self.settings.intro_run +
                                                        self.settings.sync_time *
@@ -1247,7 +1251,6 @@ class TrustChainCommunity(Community):
             else:
                 self.ipv8.strategies.append((RandomWalk(community, total_run=self.settings.intro_run), -1))
             self.build_security_community(peer.mid)
-
 
         # Check if we have pending crawl requests for this peer
         has_intro_crawl = self.request_cache.has(u"introcrawltimeout", IntroCrawlTimeout.get_number_for(peer))
