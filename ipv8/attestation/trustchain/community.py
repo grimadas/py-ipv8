@@ -504,7 +504,7 @@ class TrustChainCommunity(Community):
             return succeed((block, None))
         else:
             # This is a claim block, send block to the neighbours
-            self.send_block_pair(linked, block)
+            # self.send_block_pair(linked, block)
             return succeed((linked, block))
 
     @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, HalfBlockPayload)
