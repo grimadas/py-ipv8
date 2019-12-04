@@ -100,7 +100,7 @@ class HalfBlockSignCache(NumberCache):
         Note that we use a very high timeout for a half block signature. Ideally, we would like to have a request
         cache without any timeouts and just keep track of outstanding signature requests but this isn't possible (yet).
         """
-        return 10.0
+        return 2.0
 
     def on_timeout(self):
         if self.sign_deferred.called:
