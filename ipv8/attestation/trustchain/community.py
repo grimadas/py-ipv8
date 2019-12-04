@@ -660,7 +660,9 @@ class TrustChainCommunity(Community):
         #    and random.random() > self.settings.risk)
         peer_id = self.persistence.key_to_id(blk.public_key)
         if blk.type == b'spend':
-            if self.persistence.get_balance(peer_id) < 0 or (not proofs and random.random() > self.settings.risk):
+            if self.persistence.get_balance(peer_id) < 0 or \
+                        (not proofs and self.persistence.get_peer_proofs(peer_id, blk.sequence_number) and
+                         random.random() > self.settings.risk):
                 crawl_deferred = self.validate_claims(blk, peer)
                 return addCallback(crawl_deferred, lambda audit_proofs: self.process_half_block(blk, peer,
                                                                                                 audit_proofs))
@@ -718,10 +720,12 @@ class TrustChainCommunity(Community):
         p2 = orjson.loads(proofs[1])
         if 'spends' in p1:
             pack_stat = proofs[0]
+            pack_audit = proofs[1]
             status = p1
             audits = p2
         elif 'spends' in p2:
             pack_stat = proofs[1]
+            pack_audit = proofs[0]
             status = p2
             audits = p1
         else:
@@ -736,9 +740,8 @@ class TrustChainCommunity(Community):
         peer_id = self.persistence.key_to_id(block.public_key)
         # Put audit status into the local db
         res = self.persistence.dump_peer_status(peer_id, status)
+        self.persistence.add_peer_proofs(peer_id, status['seq_num'], status, pack_audit)
         return res
-        # self.persistence.add_peer_proofs(peer_id, status['seq_num'],  orjson.dumps(audits))
-        # return self.process_half_block(block, peer)
 
     def finalize_audits(self, audit_seq, status, audits):
         self.logger.info("Audit with seq number %s finalized", audit_seq)
