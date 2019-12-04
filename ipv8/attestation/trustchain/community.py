@@ -648,48 +648,48 @@ class TrustChainCommunity(Community):
 
         self.logger.info("Received request block addressed to us (%s)", blk)
 
-        def on_should_sign_outcome(should_sign):
+        def on_should_sign_outcome(should_sign, cpy_blk):
             if not should_sign:
-                self.logger.info("Not signing block %s", blk)
+                self.logger.info("Not signing block %s", cpy_blk)
                 return succeed(None)
             #   or (self.persistence.get_last_seq_num(peer_id) < blk.sequence_number
             #    and random.random() > self.settings.risk)
-            peer_id = self.persistence.key_to_id(blk.public_key)
-            if blk.type == b'spend':
+            peer_id = self.persistence.key_to_id(cpy_blk.public_key)
+            if cpy_blk.type == b'spend':
                 if self.persistence.get_balance(peer_id) < 0 or (not proofs and random.random() > self.settings.risk):
-                    crawl_deferred = self.validate_claims(blk, peer)
-                    return addCallback(crawl_deferred, lambda audit_proofs: self.process_half_block(blk, peer,
+                    crawl_deferred = self.validate_claims(cpy_blk, peer)
+                    return addCallback(crawl_deferred, lambda audit_proofs: self.process_half_block(cpy_blk, peer,
                                                                                                     audit_proofs))
-                if 'condition' in blk.transaction:
-                    pub_key = unhexlify(blk.transaction['condition'])
+                if 'condition' in cpy_blk.transaction:
+                    pub_key = unhexlify(cpy_blk.transaction['condition'])
                     if self.my_peer.public_key.key_to_bin() != pub_key:
                         # This is a multi-hop conditional transaction, relay to next peer
                         # TODO: add to settings fees
                         fees = 0
-                        spend_value = blk.transaction['value'] - fees
-                        new_tx = blk.transaction
+                        spend_value = cpy_blk.transaction['value'] - fees
+                        new_tx = cpy_blk.transaction
                         val = self.prepare_spend_transaction(pub_key, spend_value)
                         if not val:
                             # need to mint new values
                             mint = self.prepare_mint_transaction()
                             return addCallback(self.self_sign_block(block_type=b'claim', transaction=mint),
-                                               lambda _: self.process_half_block(blk, peer))
+                                               lambda _: self.process_half_block(cpy_blk, peer))
                         next_peer, added = val
                         new_tx.update(added)
                         return self.sign_block(next_peer, next_peer.public_key.key_to_bin(), transaction=new_tx,
-                                               block_type=blk.type, from_peer=peer,
-                                               from_peer_seq_num=blk.sequence_number)
+                                               block_type=cpy_blk.type, from_peer=peer,
+                                               from_peer_seq_num=cpy_blk.sequence_number)
                     else:
                         # Conditional block that terminates at our peer: add additional_info and send claim
-                        sign = blk.crypto.create_signature(self.my_peer.key, blk.transaction['nonce'].encode())
-                        new_tx = blk.transaction
+                        sign = cpy_blk.crypto.create_signature(self.my_peer.key, cpy_blk.transaction['nonce'].encode())
+                        new_tx = cpy_blk.transaction
                         new_tx['proof'] = hexlify(sign).decode()
-                        return self.sign_block(peer, linked=blk, block_type=b'claim', additional_info=new_tx)
+                        return self.sign_block(peer, linked=cpy_blk, block_type=b'claim', additional_info=new_tx)
 
-                return self.sign_block(peer, linked=blk, block_type=b'claim')
+                return self.sign_block(peer, linked=cpy_blk, block_type=b'claim')
 
         # determine if we want to sign this block
-        return addCallback(self.should_sign(blk), on_should_sign_outcome)
+        return addCallback(self.should_sign(blk), lambda ss, cpy_blk=blk: on_should_sign_outcome(ss, cpy_blk))
 
     def validate_claims(self, last_block, peer):
         from_peer = self.persistence.key_to_id(last_block.public_key)
