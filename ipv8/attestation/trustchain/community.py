@@ -747,11 +747,14 @@ class TrustChainCommunity(Community):
         my_id = self.persistence.key_to_id(self.my_peer.public_key.key_to_bin())
         self.persistence.add_peer_proofs(my_id, audit_seq, status, packet)
         # Get peers requested
+        processed_ids = set()
         for seq, peers_val in list(self.audit_requests.items()):
             if seq <= audit_seq:
                 for p, audit_id in peers_val:
-                    self.send_audit_proofs(p, audit_id, packet)
-                    self.send_audit_proofs(p, audit_id, status)
+                    if (p, audit_id) not in processed_ids:
+                        self.send_audit_proofs(p, audit_id, packet)
+                        self.send_audit_proofs(p, audit_id, status)
+                        processed_ids.add((p, audit_id))
                 del self.audit_requests[seq]
 
     def trustchain_active_sync(self, community_mid):
