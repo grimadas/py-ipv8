@@ -813,6 +813,8 @@ class TrustChainCommunity(Community):
         Send an audit proof for the peer;
         Expect status and audit proofs for the status
         """
+        self._logger.debug("Sending audit proof request to peer %s:%d (seq num: %d, id: %s)",
+                           peer.address[0], peer.address[1], seq_num, audit_id)
         crawl_deferred = Deferred()
         self.request_cache.add(CrawlRequestCache(self, audit_id, crawl_deferred, total_blocks=2))
 
