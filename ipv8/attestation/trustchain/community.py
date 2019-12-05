@@ -1279,7 +1279,7 @@ class TrustChainCommunity(Community):
         if not self.ipv8:
             self.logger.warning('No IPv8 service object available, cannot start PEXCommunity')
         elif peer.public_key.key_to_bin() in known_minters and peer.mid not in self.pex:
-            community = SubTrustCommunity(self.my_peer, self.ipv8.endpoint, Network(), mid=peer.mid)
+            community = SubTrustCommunity(self.my_peer, self.ipv8.endpoint, Network(), mid=peer.mid, max_peers=-1)
             self.ipv8.overlays.append(community)
             # Discover and connect to everyone for 50 seconds
             self.pex[peer.mid] = community
