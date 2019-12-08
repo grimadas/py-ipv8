@@ -24,6 +24,7 @@ from ipv8.peerdiscovery.network import Network
 from .block import ANY_COUNTERPARTY_PK, EMPTY_PK, GENESIS_SEQ, NoodleBlock, UNKNOWN_SEQ, ValidationResult
 from .caches import ChainCrawlCache, CrawlRequestCache, HalfBlockSignCache, IntroCrawlTimeout
 from .database import NoodleDB
+from .exceptions import InsufficientBalanceException, NoPathFoundException
 from .memory_database import NoodleMemoryDatabase
 from .payload import *
 from .settings import NoodleSettings, SecurityMode
@@ -121,7 +122,22 @@ class NoodleCommunity(Community):
         # Enable the memory database
         orig_db = self.persistence
         self.persistence = NoodleMemoryDatabase(working_directory, db_name)
-        self.persistence.original_db = self.persistence
+        self.persistence.original_db = orig_db
+
+    def transfer(self, dest_peer, spend_value):
+        self._logger.debug("Making spend to peer %s (value: %f)", dest_peer, spend_value)
+
+        try:
+            next_hop_peer, tx = self.prepare_spend_transaction(dest_peer.public_key.key_to_bin(), spend_value)
+        except Exception as exc:
+            return fail(exc)
+
+        if next_hop_peer != dest_peer:
+            # Multi-hop payment, add condition + nonce
+            nonce = self.persistence.get_new_peer_nonce(dest_peer.public_key.key_to_bin())
+            condition = hexlify(dest_peer.public_key.key_to_bin()).decode()
+            tx.update({'nonce': nonce, 'condition': condition})
+        return self.sign_block(next_hop_peer, next_hop_peer.public_key.key_to_bin(), block_type=b'spend', transaction=tx)
 
     def init_mem_db_flush(self, flush_time):
         if not self.mem_db_flush_lc:
@@ -189,18 +205,20 @@ class NoodleCommunity(Community):
         #
 
     def prepare_spend_transaction(self, pub_key, spend_value, **kwargs):
-        # check the balance first
+        """
+        Prepare a spend transaction.
+        First check your own balance. Next, find a path to the target peer.
+        """
         my_pk = self.my_peer.public_key.key_to_bin()
         my_id = self.persistence.key_to_id(my_pk)
         my_balance = self.persistence.get_balance(my_id)
 
         if my_balance < spend_value:
-            return None
+            raise InsufficientBalanceException("Insufficient balance.")
         else:
             peer = self.get_hop_to_peer(pub_key)
             if not peer:
-                self.logger.error("Tried all edges. My peer is not connected!")
-                return None
+                raise NoPathFoundException("No path to target peer found.")
             peer_id = self.persistence.key_to_id(peer.public_key.key_to_bin())
             pw_total = self.persistence.get_total_pairwise_spends(my_id, peer_id)
             added = {"value": spend_value, "total_spend": pw_total + spend_value}
@@ -652,7 +670,7 @@ class NoodleCommunity(Community):
         self.logger.info("Received request block addressed to us (%s)", blk)
 
         # determine if we want to sign this block
-        return addCallback(self.should_sign(blk),
+        return addCallback(maybeDeferred(self.should_sign, blk),
                            lambda ss, blk=blk, proofs=proofs, peer=peer: self.on_should_sign_outcome(ss, blk, proofs, peer))
 
     def on_should_sign_outcome(self, should_sign, blk, proofs, peer):
