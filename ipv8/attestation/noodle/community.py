@@ -24,6 +24,7 @@ from ipv8.peerdiscovery.network import Network
 from .block import ANY_COUNTERPARTY_PK, EMPTY_PK, GENESIS_SEQ, NoodleBlock, UNKNOWN_SEQ, ValidationResult
 from .caches import ChainCrawlCache, CrawlRequestCache, HalfBlockSignCache, IntroCrawlTimeout
 from .database import NoodleDB
+from .memory_database import NoodleMemoryDatabase
 from .payload import *
 from .settings import NoodleSettings, SecurityMode
 from ...community import Community
@@ -83,7 +84,7 @@ class NoodleCommunity(Community):
         self.logger = logging.getLogger(self.__class__.__name__)
         self.persistence = self.DB_CLASS(working_directory, db_name, self.my_peer.public_key.key_to_bin())
         self.relayed_broadcasts = []
-        self.logger.debug("The trustchain community started with Public Key: %s",
+        self.logger.debug("The Noodle community started with Public Key: %s",
                           hexlify(self.my_peer.public_key.key_to_bin()))
         self.shutting_down = False
         self.listeners_map = {}  # Map of block_type -> [callbacks]
@@ -95,7 +96,6 @@ class NoodleCommunity(Community):
         self.mem_db_flush_lc = None
         self.entangle_lc = None
 
-        # Trustchain SubCommunities
         self.ipv8 = kwargs.pop('ipv8', None)
         self.pex = {}
         self.pex_map = {}
@@ -117,6 +117,11 @@ class NoodleCommunity(Community):
             chr(11): self.received_audit_proofs_request,
             chr(12): self.received_audit_request
         })
+
+        # Enable the memory database
+        orig_db = self.persistence
+        self.persistence = NoodleMemoryDatabase(working_directory, db_name)
+        self.persistence.original_db = self.persistence
 
     def init_mem_db_flush(self, flush_time):
         if not self.mem_db_flush_lc:
