@@ -24,9 +24,9 @@ EMPTY_PK = b'0' * 74
 ANY_COUNTERPARTY_PK = EMPTY_PK
 
 
-class TrustChainBlock(object):
+class NoodleBlock(object):
     """
-    Container for TrustChain block information
+    Container for Noodle block information
     """
     Data = namedtuple('Data', ['type',
                                'transaction',
@@ -39,7 +39,7 @@ class TrustChainBlock(object):
                                'timestamp',
                                'insert_time'])
     """
-    Data struct to initialize a TrustChainBlock.
+    Data struct to initialize a NoodleBlock.
 
 
         **[0] type:** The block type name, as utf-8 string or utf-8 encoded bytes.
@@ -95,7 +95,7 @@ class TrustChainBlock(object):
         :param serializer: An optional custom serializer to use for this block.
         :type serializer: Serializer
         """
-        super(TrustChainBlock, self).__init__()
+        super(NoodleBlock, self).__init__()
         self.serializer = serializer
         if data is None:
             # data
@@ -170,7 +170,7 @@ class TrustChainBlock(object):
         return self.hash
 
     def __eq__(self, other):
-        if not isinstance(other, TrustChainBlock):
+        if not isinstance(other, NoodleBlock):
             return False
         return self.pack() == other.pack()
 

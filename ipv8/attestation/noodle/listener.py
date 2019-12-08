@@ -3,7 +3,7 @@ from __future__ import absolute_import
 import abc
 import six
 
-from .block import TrustChainBlock
+from .block import NoodleBlock
 
 
 class BlockListener(six.with_metaclass(abc.ABCMeta, object)):
@@ -11,7 +11,7 @@ class BlockListener(six.with_metaclass(abc.ABCMeta, object)):
     This class defines a listener for TrustChain blocks with a specific type.
     """
 
-    BLOCK_CLASS = TrustChainBlock
+    BLOCK_CLASS = NoodleBlock
 
     @abc.abstractmethod
     def should_sign(self, block):

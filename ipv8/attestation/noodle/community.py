@@ -1,7 +1,5 @@
 """
-The TrustChain Community is the first step in an incremental approach in building a new reputation system.
-This reputation system builds a tamper proof interaction history contained in a chain data-structure.
-Every node has a chain and these chains intertwine by blocks shared by chains.
+The Noodle community.
 """
 from __future__ import absolute_import
 
@@ -23,11 +21,11 @@ from twisted.internet.task import LoopingCall
 
 from ipv8.peerdiscovery.discovery import RandomWalk
 from ipv8.peerdiscovery.network import Network
-from .block import ANY_COUNTERPARTY_PK, EMPTY_PK, GENESIS_SEQ, TrustChainBlock, UNKNOWN_SEQ, ValidationResult
+from .block import ANY_COUNTERPARTY_PK, EMPTY_PK, GENESIS_SEQ, NoodleBlock, UNKNOWN_SEQ, ValidationResult
 from .caches import ChainCrawlCache, CrawlRequestCache, HalfBlockSignCache, IntroCrawlTimeout
-from .database import TrustChainDB
+from .database import NoodleDB
 from .payload import *
-from ...attestation.trustchain.settings import TrustChainSettings, SecurityMode
+from .settings import NoodleSettings, SecurityMode
 from ...community import Community
 from ...keyvault.crypto import default_eccrypto
 from ...lazy_community import lazy_wrapper, lazy_wrapper_unsigned, lazy_wrapper_unsigned_wd
@@ -63,24 +61,24 @@ class SubTrustCommunity(Community):
         super(SubTrustCommunity, self).__init__(*args, **kwargs)
 
 
-class TrustChainCommunity(Community):
+class NoodleCommunity(Community):
     """
-    Community for reputation based on TrustChain tamper proof interaction history.
+    Community for secure payments.
     """
     master_peer = Peer(unhexlify("4c69624e61434c504b3a5730f52156615ecbcedb36c442992ea8d3c26b418edd8bd00e01dce26028cd"
                                  "1ebe5f7dce59f4ed59f8fcee268fd7f1c6dc2fa2af8c22e3170e00cdecca487745"))
 
     UNIVERSAL_BLOCK_LISTENER = b'UNIVERSAL_BLOCK_LISTENER'
-    DB_CLASS = TrustChainDB
-    DB_NAME = 'trustchain'
+    DB_CLASS = NoodleDB
+    DB_NAME = 'noodle'
     version = b'\x02'
 
     def __init__(self, *args, **kwargs):
         working_directory = kwargs.pop('working_directory', '')
         db_name = kwargs.pop('db_name', self.DB_NAME)
-        self.settings = kwargs.pop('settings', TrustChainSettings())
+        self.settings = kwargs.pop('settings', NoodleSettings())
         self.receive_block_lock = RLock()
-        super(TrustChainCommunity, self).__init__(*args, **kwargs)
+        super(NoodleCommunity, self).__init__(*args, **kwargs)
         self.request_cache = RequestCache()
         self.logger = logging.getLogger(self.__class__.__name__)
         self.persistence = self.DB_CLASS(working_directory, db_name, self.my_peer.public_key.key_to_bin())
@@ -248,7 +246,7 @@ class TrustChainCommunity(Community):
         Get the block class for a specific block type.
         """
         if block_type not in self.listeners_map or not self.listeners_map[block_type]:
-            return TrustChainBlock
+            return NoodleBlock
 
         return self.listeners_map[block_type][0].BLOCK_CLASS
 
@@ -1228,14 +1226,14 @@ class TrustChainCommunity(Community):
     @synchronized
     def create_introduction_request(self, socket_address, extra_bytes=b''):
         extra_bytes = struct.pack('>l', self.get_chain_length())
-        return super(TrustChainCommunity, self).create_introduction_request(socket_address, extra_bytes)
+        return super(NoodleCommunity, self).create_introduction_request(socket_address, extra_bytes)
 
     @synchronized
     def create_introduction_response(self, lan_socket_address, socket_address, identifier,
                                      introduction=None, extra_bytes=b''):
         extra_bytes = struct.pack('>l', self.get_chain_length())
-        return super(TrustChainCommunity, self).create_introduction_response(lan_socket_address, socket_address,
-                                                                             identifier, introduction, extra_bytes)
+        return super(NoodleCommunity, self).create_introduction_response(lan_socket_address, socket_address,
+                                                                         identifier, introduction, extra_bytes)
 
     def defered_sync_start(self, mid):
         self.periodic_sync_lc[mid].start(self.settings.sync_time)
@@ -1290,7 +1288,7 @@ class TrustChainCommunity(Community):
                 for k in self.bootstrap_master:
                     community.walk_to(k)
             else:
-                self.ipv8.strategies.append((RandomWalk(community, total_run=self.settings.intro_run), -1))
+                self.ipv8.strategies.append((RandomWalk(community), -1))
             self.build_security_community(peer.mid)
 
         # Check if we have pending crawl requests for this peer
@@ -1309,22 +1307,22 @@ class TrustChainCommunity(Community):
                 self.crawl_lowest_unknown(peer, latest_block_num=chain_length)
 
     def unload(self):
-        self.logger.debug("Unloading the TrustChain Community.")
+        self.logger.debug("Unloading the Noodle Community.")
         self.shutting_down = True
 
         self.request_cache.shutdown()
 
-        super(TrustChainCommunity, self).unload()
+        super(NoodleCommunity, self).unload()
 
         # Close the persistence layer
         self.persistence.close()
 
 
-class TrustChainTestnetCommunity(TrustChainCommunity):
+class NoodleTestnetCommunity(NoodleCommunity):
     """
-    This community defines the testnet for TrustChain
+    This community defines the testnet for Noodle
     """
-    DB_NAME = 'trustchain_testnet'
+    DB_NAME = 'noodle_testnet'
 
     master_peer = Peer(unhexlify("4c69624e61434c504b3aa90c1e65d68e9f0ccac1385b58e4a605add2406aff9952b1b6435ab07e5385"
                                  "5eb07b062ca33af9ec55b45446dbbefc3752523a4fd3b659ecd1d8e172b7b7f30d"))

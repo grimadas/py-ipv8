@@ -77,7 +77,7 @@ class HalfBlockSignCache(NumberCache):
         """
         A cache to keep track of the signing of one of our blocks by a counterparty.
 
-        :param community: the TrustChainCommunity
+        :param community: the NoodleCommunity
         :param half_block: the half_block requiring a counterparty
         :param sign_deferred: the Deferred to fire once this block has been double signed
         :param socket_address: the peer we sent the block to

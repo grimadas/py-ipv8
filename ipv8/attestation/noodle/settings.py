@@ -9,7 +9,7 @@ class SecurityMode(Enum):
     AUDIT = 2
 
 
-class TrustChainSettings(object):
+class NoodleSettings(object):
     """
     This class holds various settings regarding TrustChain.
     """

@@ -8,14 +8,14 @@ from binascii import hexlify
 
 from six import text_type
 
-from .block import TrustChainBlock
+from .block import NoodleBlock
 from ...attestation.trustchain.blockcache import BlockCache
 from ...database import Database, database_blob
 
 DATABASE_DIRECTORY = os.path.join(u"sqlite")
 
 
-class TrustChainDB(Database):
+class NoodleDB(Database):
     """
     Persistence layer for the TrustChain Community.
     Connection layer to SQLiteDB.
@@ -35,7 +35,7 @@ class TrustChainDB(Database):
             db_path = os.path.join(working_directory, os.path.join(DATABASE_DIRECTORY, u"%s.db" % db_name))
         else:
             db_path = working_directory
-        super(TrustChainDB, self).__init__(db_path)
+        super(NoodleDB, self).__init__(db_path)
         self._logger.debug("TrustChain database path: %s", db_path)
         self.db_name = db_name
         self.block_types = {}
@@ -51,7 +51,7 @@ class TrustChainDB(Database):
         Get the block class for a specific block type.
         """
         if block_type not in self.block_types:
-            return TrustChainBlock
+            return NoodleBlock
 
         return self.block_types[block_type]
 
@@ -413,10 +413,10 @@ class TrustChainDB(Database):
             return self.get_sql_create_blocks_table("double_spends", "public_key, sequence_number, block_hash")
 
     def open(self, initial_statements=True, prepare_visioning=True):
-        return super(TrustChainDB, self).open(initial_statements, prepare_visioning)
+        return super(NoodleDB, self).open(initial_statements, prepare_visioning)
 
     def close(self, commit=True):
-        return super(TrustChainDB, self).close(commit)
+        return super(NoodleDB, self).close(commit)
 
     def check_database(self, database_version):
         """
