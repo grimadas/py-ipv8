@@ -64,7 +64,7 @@ class TrustChainDB(Database):
             u"INSERT INTO blocks (type, tx, public_key, sequence_number, link_public_key,"
             u"link_sequence_number, previous_hash, signature, block_timestamp, block_hash) VALUES(?,?,?,?,?,?,?,?,?,?)",
             block.pack_db_insert())
-        #self.commit()
+        self.commit()
 
         if self.my_blocks_cache and (block.public_key == self.my_pk or block.link_public_key == self.my_pk):
             self.my_blocks_cache.add(block)
@@ -340,7 +340,7 @@ class TrustChainDB(Database):
               u"link_sequence_number,previous_hash, signature, block_timestamp, block_hash) VALUES(?,?,?,?,?,?,?,?,?,?)"
         self.execute(sql, block1.pack_db_insert())
         self.execute(sql, block2.pack_db_insert())
-        #self.commit()
+        self.commit()
 
     def did_double_spend(self, public_key):
         """
@@ -436,9 +436,6 @@ class TrustChainDB(Database):
                     self.executescript(upgrade_script)
                 database_version += 1
             self.executescript(self.get_schema())
-            #self.commit()
+            self.commit()
 
         return self.LATEST_DB_VERSION
-
-    def add_peer(self, peer):
-        pass

@@ -1,9 +1,7 @@
 from __future__ import absolute_import
 
-import orjson as json
-
 import time
-from binascii import hexlify, unhexlify
+from binascii import hexlify
 from collections import namedtuple
 from hashlib import sha256
 
@@ -12,6 +10,7 @@ from six import binary_type
 from .payload import HalfBlockPayload
 from ...database import database_blob
 from ...keyvault.crypto import default_eccrypto
+from ...messaging.deprecated.encoding import decode, encode
 from ...messaging.serialization import default_serializer
 from ...util import old_round
 
@@ -101,7 +100,7 @@ class TrustChainBlock(object):
             # data
             self.type = b'unknown'
             self.transaction = {}
-            self._transaction = json.dumps({})
+            self._transaction = encode({})
             # identity
             self.public_key = EMPTY_PK
             self.sequence_number = GENESIS_SEQ
@@ -116,7 +115,7 @@ class TrustChainBlock(object):
             self.insert_time = None
         else:
             self._transaction = data[1] if isinstance(data[1], bytes) else binary_type(data[1])
-            self.transaction = json.loads(self._transaction)
+            _, self.transaction = decode(self._transaction)
             (self.type, self.public_key, self.sequence_number, self.link_public_key, self.link_sequence_number,
              self.previous_hash, self.signature, self.timestamp, self.insert_time) = (data[0], data[2], data[3],
                                                                                       data[4], data[5], data[6],
@@ -213,14 +212,6 @@ class TrustChainBlock(object):
         :param database: the database to check against
         :return: A tuple consisting of a ValidationResult and a list of user string errors
         """
-        if 'condition' in self.transaction and self.type == b'claim':
-            # This is a claim of a conditional transaction
-            if 'proof' not in self.transaction or \
-                    not self.crypto.is_valid_signature(
-                        self.crypto.key_from_public_bin(unhexlify(self.transaction['condition'])),
-                        self.transaction['nonce'].encode(),
-                        unhexlify(self.transaction['proof'])):
-                return ValidationResult.invalid, ["Conditional payment not valid"]
         return ValidationResult.valid, []
 
     def validate(self, database):
@@ -385,8 +376,8 @@ class TrustChainBlock(object):
             if blk.signature != self.signature:
                 result.err("Signature does not match known block")
             # if the known block is not equal, and the signatures are valid, we have a double signed PK/seq. Fraud!
-            if self.hash != blk.hash and "Invalid signature" not in result.errors and \
-                    "Public key is not valid" not in result.errors:
+            if self.hash != blk.hash and "Invalid signature" not in result.errors and\
+               "Public key is not valid" not in result.errors:
                 result.err("Double sign fraud")
                 database.add_double_spend(blk, self)
 
@@ -466,8 +457,7 @@ class TrustChainBlock(object):
         self.hash = self.calculate_hash()
 
     @classmethod
-    def create(cls, block_type, transaction, database, public_key, link=None, additional_info=None, link_pk=None,
-               double_spend_seq=None):
+    def create(cls, block_type, transaction, database, public_key, link=None, additional_info=None, link_pk=None):
         """
         Create an empty next block.
         :param block_type: the type of the block to be constructed
@@ -478,17 +468,12 @@ class TrustChainBlock(object):
         :param additional_info: additional information, which has a higher priority than the
                transaction when link exists
         :param link_pk: the public key of the counterparty in this transaction
-        :param double_spend_seq: If is not none Will create a double spend block with
         :return: A newly created block
         """
-        if double_spend_seq:
-            blk = database.get(public_key, double_spend_seq)
-        else:
-            blk = database.get_latest(public_key)
+        blk = database.get_latest(public_key)
         ret = cls()
         if link:
-            ret.type = link.type if block_type == b'unknown' else block_type
-            # ret.type = link.type if link.link_public_key != ANY_COUNTERPARTY_PK else block_type
+            ret.type = link.type if link.link_public_key != ANY_COUNTERPARTY_PK else block_type
             ret.transaction = link.transaction if additional_info is None else additional_info
             ret.link_public_key = link.public_key
             ret.link_sequence_number = link.sequence_number
@@ -502,7 +487,7 @@ class TrustChainBlock(object):
             ret.sequence_number = blk.sequence_number + 1
             ret.previous_hash = blk.hash
 
-        ret._transaction = json.dumps(ret.transaction)
+        ret._transaction = encode(ret.transaction)
         ret.public_key = public_key
         ret.signature = EMPTY_SIG
         ret.hash = ret.calculate_hash()
@@ -527,7 +512,7 @@ class TrustChainBlock(object):
             if key == 'key' or key == 'serializer' or key == 'crypto' or key == '_transaction':
                 continue
             if key == 'transaction':
-                yield key, json.loads(self._transaction)[1]
+                yield key, decode(self._transaction, cast_utf8=True)[1]
             elif isinstance(value, binary_type) and key != "insert_time" and key != "type":
                 yield key, hexlify(value).decode('utf-8')
             else:
