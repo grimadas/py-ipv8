@@ -31,11 +31,13 @@ class TestBlockListener(BlockListener):
         pass
 
 
-class TestNoodleCommunity(TestBase):
+class TestNoodleCommunityBase(TestBase):
+    __testing__ = False
+    NUM_NODES = 2
 
     def setUp(self):
-        super(TestNoodleCommunity, self).setUp()
-        self.initialize(NoodleCommunity, 2)
+        super(TestNoodleCommunityBase, self).setUp()
+        self.initialize(NoodleCommunity, self.NUM_NODES)
 
         for node in self.nodes:
             node.overlay.add_listener(TestBlockListener(), [b'spend', b'claim'])
@@ -45,6 +47,10 @@ class TestNoodleCommunity(TestBase):
         ipv8.overlay.ipv8 = ipv8
 
         return ipv8
+
+
+class TestNoodleCommunityTwoNodes(TestNoodleCommunityBase):
+    __testing__ = True
 
     def test_transfer_insufficient_balance(self):
         """
@@ -82,6 +88,30 @@ class TestNoodleCommunity(TestBase):
         yield self.nodes[0].overlay.mint()
         yield self.nodes[0].overlay.transfer(self.nodes[1].overlay.my_peer, 10)
 
+        my_pk = self.nodes[0].overlay.my_peer.public_key.key_to_bin()
+        my_id = self.nodes[0].overlay.persistence.key_to_id(my_pk)
+        self.assertEqual(self.nodes[0].overlay.persistence.get_balance(my_id),
+                         self.nodes[0].overlay.settings.initial_mint_value - 10)
+
+        my_pk = self.nodes[1].overlay.my_peer.public_key.key_to_bin()
+        my_id = self.nodes[1].overlay.persistence.key_to_id(my_pk)
+        self.assertEqual(self.nodes[1].overlay.persistence.get_balance(my_id), 10)
+
+    @inlineCallbacks
+    def test_transfer_overspend(self):
+        """
+        Test an overspend transaction.
+        """
+        yield self.introduce_nodes()
+        self.nodes[0].overlay.persistence.get_balance = lambda *_, verified=True: 10000
+        self.nodes[0].overlay.transfer(self.nodes[1].overlay.my_peer, 10)
+        yield self.sleep(0.3)
+
+        # The block should not be counter-signed
+        my_pub_key = self.nodes[1].overlay.my_peer.public_key.key_to_bin()
+        latest_block = self.nodes[1].overlay.persistence.get_latest(my_pub_key)
+        self.assertFalse(latest_block)
+
     @inlineCallbacks
     def test_mint(self):
         """
@@ -97,3 +127,36 @@ class TestNoodleCommunity(TestBase):
         my_id = self.nodes[0].overlay.persistence.key_to_id(my_pk)
         self.assertEqual(self.nodes[0].overlay.persistence.get_balance(my_id),
                          self.nodes[0].overlay.settings.initial_mint_value)
+
+
+class TestNoodleCommunityThreeNodes(TestNoodleCommunityBase):
+    __testing__ = True
+    NUM_NODES = 3
+
+    @inlineCallbacks
+    def test_transfer_chain(self):
+        """
+        Test transferring funds from minter to A and then from A to B.
+        """
+        yield self.introduce_nodes()
+        yield self.nodes[0].overlay.mint()
+        yield self.nodes[0].overlay.transfer(self.nodes[1].overlay.my_peer, 10)
+        yield self.nodes[1].overlay.transfer(self.nodes[2].overlay.my_peer, 10)
+
+    @inlineCallbacks
+    def test_transfer_chain_overspend(self):
+        """
+        Test transferring funds from minter to A and then from A to B. The final transfer will be an overspend.
+        """
+        yield self.introduce_nodes()
+        yield self.nodes[0].overlay.mint()
+        yield self.nodes[0].overlay.transfer(self.nodes[1].overlay.my_peer, 10)
+        self.nodes[1].overlay.persistence.get_balance = lambda *_, verified=True: 10000
+        self.nodes[1].overlay.transfer(self.nodes[2].overlay.my_peer, 11)
+
+        yield self.sleep(0.3)
+
+        # The block should not be counter-signed
+        my_pub_key = self.nodes[2].overlay.my_peer.public_key.key_to_bin()
+        latest_block = self.nodes[2].overlay.persistence.get_latest(my_pub_key)
+        self.assertFalse(latest_block)
