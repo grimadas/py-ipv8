@@ -38,7 +38,7 @@ class TestNoodleCommunity(TestBase):
         self.initialize(NoodleCommunity, 2)
 
         for node in self.nodes:
-            node.overlay.add_listener(TestBlockListener(), [b'test'])
+            node.overlay.add_listener(TestBlockListener(), [b'spend', b'claim'])
 
     def create_node(self):
         ipv8 = MockIPv8(u"curve25519", NoodleCommunity, working_directory=u":memory:")
@@ -72,6 +72,15 @@ class TestNoodleCommunity(TestBase):
 
         self.nodes[0].overlay.persistence.get_balance = lambda *_, verified=True: 10000
         return self.nodes[0].overlay.transfer(self.nodes[1].overlay.my_peer, 100).addCallbacks(on_success, on_failure)
+
+    @inlineCallbacks
+    def test_transfer(self):
+        """
+        Test a successful transfer.
+        """
+        yield self.introduce_nodes()
+        yield self.nodes[0].overlay.mint()
+        yield self.nodes[0].overlay.transfer(self.nodes[1].overlay.my_peer, 10)
 
     @inlineCallbacks
     def test_mint(self):
