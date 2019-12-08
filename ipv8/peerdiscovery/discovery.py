@@ -18,10 +18,6 @@ class DiscoveryStrategy(six.with_metaclass(abc.ABCMeta, object)):
         self.walk_lock = Lock()
 
     @abc.abstractmethod
-    def should_continue(self):
-        pass
-
-    @abc.abstractmethod
     def take_step(self):
         pass
 
