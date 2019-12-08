@@ -45,12 +45,6 @@ class NoodleSettings(object):
         # Ignore validation errors
         self.ignore_validation = False
 
-        # Id of the peer
-        self.my_id = 1
-
-        # Sub-community introduction time in seconds 
-        self.intro_run = 100
-
         # Sync round time in seconds 
         self.sync_time = 1
 
@@ -62,3 +56,6 @@ class NoodleSettings(object):
 
         # Tolerated inconsistency risk
         self.risk = 0.5
+
+        # Initial minting value
+        self.initial_mint_value = 1000

@@ -3,12 +3,9 @@ The Noodle community.
 """
 from __future__ import absolute_import
 
-import csv
 import logging
-import os
 import random
 import struct
-import time
 from binascii import hexlify, unhexlify
 from functools import wraps
 from threading import RLock
@@ -91,18 +88,16 @@ class NoodleCommunity(Community):
         self.listeners_map = {}  # Map of block_type -> [callbacks]
         self.db_cleanup_lc = self.register_task("db_cleanup", LoopingCall(self.do_db_cleanup))
         self.db_cleanup_lc.start(600)
-        self.known_graph = None
+        self.known_graph = nx.Graph()
         self.periodic_sync_lc = {}
 
         self.mem_db_flush_lc = None
-        self.entangle_lc = None
 
         self.ipv8 = kwargs.pop('ipv8', None)
         self.pex = {}
         self.pex_map = {}
         self.bootstrap_master = None
         self.audit_requests = {}
-        self.minters = set()
 
         self.decode_map.update({
             chr(1): self.received_half_block,
@@ -196,13 +191,11 @@ class NoodleCommunity(Community):
                         self.logger.error("Got a path, but not connected! %s. Removing the edge ", random_path[1])
                         self.known_graph.remove_edge(source, random_path[1])
             return p
-        # for peer_mid, sub_com in self.pex.items():
-        #    p = sub_com.get_peer_by_pub_key(peer_pub_key)
-        #    if p:
-        #        # Connected through peer_mid
-        #        return self.get_peer_by_mid(peer_mid)
-        # Peer not found => choose randomly??
-        #
+
+    def mint(self):
+        self._logger.info("Minting initial value...")
+        mint = self.prepare_mint_transaction()
+        return self.self_sign_block(block_type=b'claim', transaction=mint)
 
     def prepare_spend_transaction(self, pub_key, spend_value, **kwargs):
         """
@@ -226,15 +219,11 @@ class NoodleCommunity(Community):
             return peer, added
 
     def prepare_mint_transaction(self):
-        # TODO: replace with settings
-        mint_val = 1000
-        if os.getenv('INIT_MINT'):
-            mint_val = float(os.getenv('INIT_MINT'))
-
         minter = self.persistence.key_to_id(EMPTY_PK)
         pk = self.my_peer.public_key.key_to_bin()
         my_id = self.persistence.key_to_id(pk)
         total = self.persistence.get_total_pairwise_spends(minter, my_id)
+        mint_val = self.settings.initial_mint_value
         transaction = {"value": mint_val, "mint_proof": True, "total_spend": total + mint_val}
         return transaction
 
@@ -498,7 +487,6 @@ class NoodleCommunity(Community):
         if not self.persistence.contains(block):
             self.persistence.add_block(block)
             self.notify_listeners(block)
-            # self.update_notify(block)
 
         if peer == self.my_peer:
             # We created a self-signed block / initial claim, send to the neighbours
@@ -584,17 +572,6 @@ class NoodleCommunity(Community):
             else:
                 reactor.callLater(0.5 * random.random(), self.send_block_pair, block1, block2, ttl=payload.ttl)
 
-    def update_notify(self, block):
-        self.network.known_network.add_edge(block.public_key, block.link_public_key)
-        block_stat_file = os.path.join(os.environ['PROJECT_DIR'], 'output', 'leader_blocks_time_'
-                                       + str(self.settings.my_id) + '.csv')
-
-        with open(block_stat_file, "a") as t_file:
-            writer = csv.DictWriter(t_file, ['time', 'transaction', "seq_num", "link"])
-            writer.writerow({"time": time.time(), 'transaction': str(block.transaction),
-                             'seq_num': block.sequence_number, "link": block.link_sequence_number
-                             })
-
     def validate_persist_block(self, block, peer=None):
         """
         Validate a block and if it's valid, persist it. Return the validation result.
@@ -643,7 +620,6 @@ class NoodleCommunity(Community):
                 return fail(RuntimeError("Block proofs are not valid, refusing to sign: %s" % blk))
 
         # Check if we are waiting for this signature response
-        # self.update_notify(blk)
         link_block_id_int = int(hexlify(blk.linked_block_id), 16) % 100000000
         if self.request_cache.has(u'sign', link_block_id_int):
             cache = self.request_cache.pop(u'sign', link_block_id_int)
