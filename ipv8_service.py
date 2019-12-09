@@ -122,6 +122,10 @@ else:
                 my_peer = self.keys[overlay['key']]
                 overlay_instance = overlay_class(my_peer, self.endpoint, self.network, **overlay['initialize'])
                 self.overlays.append(overlay_instance)
+
+                if overlay_class == NoodleCommunity or overlay_class == NoodleTestnetCommunity:
+                    overlay_instance.ipv8 = self
+
                 for walker in overlay['walkers']:
                     strategy_class = _WALKERS.get(walker['strategy'],
                                                   overlay_instance.get_available_strategies().get(walker['strategy']))
