@@ -653,10 +653,11 @@ class NoodleCommunity(Community):
         if not should_sign:
             self.logger.info("Not signing block %s", blk)
             return succeed(None)
-        #   or (self.persistence.get_last_seq_num(peer_id) < blk.sequence_number
-        #    and random.random() > self.settings.risk)
+
         peer_id = self.persistence.key_to_id(blk.public_key)
         if blk.type == b'spend':
+            # If balance < 0 (or depending on the risk parameter), ask for audit proofs.
+            self._logger.info("B: %f", self.persistence.get_balance(peer_id))
             if self.persistence.get_balance(peer_id) < 0 or \
                         (not proofs and not self.persistence.get_peer_proofs(peer_id, blk.sequence_number) and
                          random.random() > self.settings.risk):
@@ -803,6 +804,8 @@ class NoodleCommunity(Community):
             self.send_audit_proofs(source_address, payload.crawl_id, status)
         else:
             # There is no ready audit. Remember and answer later
+            self._logger.info("Adding audit proof request from %s:%d (id: %d) to cache",
+                              source_address[0], source_address[1], payload.crawl_id)
             if payload.seq_num not in self.audit_requests:
                 self.audit_requests[payload.seq_num] = []
             self.audit_requests[payload.seq_num].append((source_address, payload.crawl_id))
@@ -1237,12 +1240,6 @@ class NoodleCommunity(Community):
     def defered_sync_stop(self, mid):
         self.periodic_sync_lc[mid].stop()
 
-    def all_sync_stop(self):
-        if self.mem_db_flush_lc:
-            self.mem_db_flush_lc.stop()
-        for mid in self.pex:
-            self.defered_sync_stop(mid)
-
     def build_security_community(self, community_mid):
         # Start sync task after the discovery
         task = self.trustchain_sync \
@@ -1307,6 +1304,11 @@ class NoodleCommunity(Community):
         self.shutting_down = True
 
         self.request_cache.shutdown()
+
+        if self.mem_db_flush_lc:
+            self.mem_db_flush_lc.stop()
+        for mid in self.pex:
+            self.defered_sync_stop(mid)
 
         super(NoodleCommunity, self).unload()
 

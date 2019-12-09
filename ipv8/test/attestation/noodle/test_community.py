@@ -8,6 +8,7 @@ from ....attestation.noodle.block import NoodleBlock
 from ....attestation.noodle.community import NoodleCommunity
 from ....attestation.noodle.exceptions import InsufficientBalanceException, NoPathFoundException
 from ....attestation.noodle.listener import BlockListener
+from ....attestation.noodle.settings import NoodleSettings, SecurityMode
 
 
 class DummyBlock(NoodleBlock):
@@ -160,3 +161,36 @@ class TestNoodleCommunityThreeNodes(TestNoodleCommunityBase):
         my_pub_key = self.nodes[2].overlay.my_peer.public_key.key_to_bin()
         latest_block = self.nodes[2].overlay.persistence.get_latest(my_pub_key)
         self.assertFalse(latest_block)
+
+
+class TestNoodleCommunityTwoNodesAudits(TestNoodleCommunityBase):
+    __testing__ = True
+
+    def create_node(self):
+        settings = NoodleSettings()
+        settings.security_mode = SecurityMode.AUDIT
+        ipv8 = MockIPv8(u"curve25519", NoodleCommunity, working_directory=u":memory:", settings=settings)
+        ipv8.overlay.ipv8 = ipv8
+
+        return ipv8
+
+    @inlineCallbacks
+    def test_transfer_full_risk(self):
+        """
+        Test a successful transfer with audits and full risk.
+        """
+        self.nodes[1].overlay.settings.risk = 1
+
+        yield self.introduce_nodes()
+        yield self.nodes[0].overlay.mint()
+        yield self.sleep(0.1)  # To allow the receivers of the mint block to update their caches
+        yield self.nodes[0].overlay.transfer(self.nodes[1].overlay.my_peer, 10)
+
+        my_pk = self.nodes[0].overlay.my_peer.public_key.key_to_bin()
+        my_id = self.nodes[0].overlay.persistence.key_to_id(my_pk)
+        self.assertEqual(self.nodes[0].overlay.persistence.get_balance(my_id),
+                         self.nodes[0].overlay.settings.initial_mint_value - 10)
+
+        my_pk = self.nodes[1].overlay.my_peer.public_key.key_to_bin()
+        my_id = self.nodes[1].overlay.persistence.key_to_id(my_pk)
+        self.assertEqual(self.nodes[1].overlay.persistence.get_balance(my_id), 10)
