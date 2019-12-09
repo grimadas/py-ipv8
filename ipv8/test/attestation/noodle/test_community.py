@@ -124,6 +124,21 @@ class TestNoodleCommunityTwoNodes(TestNoodleCommunityBase):
         self.assertEqual(self.nodes[0].overlay.persistence.get_balance(my_id), 0)
 
     @inlineCallbacks
+    def test_make_random_transfer(self):
+        """
+        Test making a random transfer.
+        """
+        yield self.introduce_nodes()
+        self.nodes[1].overlay.make_random_transfer()  # Should request for mint
+        yield self.sleep(0.2)
+        self.nodes[1].overlay.make_random_transfer()  # Should make the payment now
+        yield self.sleep(0.2)
+
+        my_pk = self.nodes[1].overlay.my_peer.public_key.key_to_bin()
+        my_id = self.nodes[1].overlay.persistence.key_to_id(my_pk)
+        self.assertEqual(self.nodes[1].overlay.persistence.get_balance(my_id), 9999)
+
+    @inlineCallbacks
     def test_transfer_overspend(self):
         """
         Test an overspend transaction.

@@ -190,7 +190,7 @@ class NoodleCommunity(Community):
         my_id = self.persistence.key_to_id(my_pk)
         my_balance = self.persistence.get_balance(my_id)
 
-        if my_balance < 0:
+        if my_balance <= 0:
             self.ask_minters_for_funds()
             return
 
