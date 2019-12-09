@@ -184,6 +184,9 @@ class NoodleCommunity(Community):
         # Look in the known_graph the path to the peer
         if not self.known_graph:
             self.logger.error("World graph is not known")
+        elif peer_pub_key not in self.known_graph:
+            self.logger.error("Target peer is not in known graph")
+            return None
         else:
             source = self.my_peer.public_key.key_to_bin()
             target = peer_pub_key
