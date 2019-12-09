@@ -661,7 +661,8 @@ class TrustChainCommunity(Community):
         peer_id = self.persistence.key_to_id(blk.public_key)
         if blk.type == b'spend':
             if self.persistence.get_balance(peer_id) < 0 or \
-                        (not proofs and not self.persistence.get_peer_proofs(peer_id, blk.sequence_number) and
+                        (not proofs and
+                         not self.persistence.get_peer_proofs(peer_id, blk.sequence_number) and
                          random.random() > self.settings.risk):
                 crawl_deferred = self.validate_claims(blk, peer)
                 return addCallback(crawl_deferred, lambda audit_proofs: self.process_half_block(blk, peer,
@@ -1271,17 +1272,10 @@ class TrustChainCommunity(Community):
             self.pex[self.my_peer.mid] = self
             self.build_security_community(self.my_peer.mid)
 
-    @synchronized
-    def introduction_response_callback(self, peer, dist, payload):
-        chain_length = None
-        if payload.extra_bytes:
-            chain_length = struct.unpack('>l', payload.extra_bytes)[0]
-
-        if peer.address in self.network.blacklist:  # Do not crawl addresses in our blacklist (trackers)
-            return
+    def form_subtrust_community(self, peer):
         known_minters = set(nx.get_node_attributes(self.known_graph, 'minter').keys())
         if not self.ipv8:
-            self.logger.warning('No IPv8 service object available, cannot start PEXCommunity')
+            self.logger.warning('No IPv8 service object available, cannot start SubCommunity ')
         elif peer.public_key.key_to_bin() in known_minters and peer.mid not in self.pex:
             community = SubTrustCommunity(self.my_peer, self.ipv8.endpoint, Network(), mid=peer.mid, max_peers=-1)
             self.ipv8.overlays.append(community)
@@ -1294,6 +1288,21 @@ class TrustChainCommunity(Community):
             else:
                 self.ipv8.strategies.append((RandomWalk(community, total_run=self.settings.intro_run), -1))
             self.build_security_community(peer.mid)
+
+    @synchronized
+    def introduction_request_callback(self, peer, dist, payload):
+        self.form_subtrust_community(peer)
+
+
+    @synchronized
+    def introduction_response_callback(self, peer, dist, payload):
+        chain_length = None
+        if payload.extra_bytes:
+            chain_length = struct.unpack('>l', payload.extra_bytes)[0]
+
+        if peer.address in self.network.blacklist:  # Do not crawl addresses in our blacklist (trackers)
+            return
+        self.form_subtrust_community(peer)
 
         # Check if we have pending crawl requests for this peer
         has_intro_crawl = self.request_cache.has(u"introcrawltimeout", IntroCrawlTimeout.get_number_for(peer))
