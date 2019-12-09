@@ -153,7 +153,7 @@ class NoodleCommunity(Community):
         self.persistence.commit_block_times()
 
     def trustchain_sync(self, community_id):
-        self.logger.info("Sync for the info peer  %s", community_id)
+        self.logger.info("Sync for the info peer with mid %s", hexlify(community_id))
         blk = self.persistence.get_latest_peer_block(community_id)
         val = self.pex[community_id].get_peers()
         # val = self.ipv8.overlays[self.pex_map[peer_mid]].get_peers()
