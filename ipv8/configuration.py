@@ -93,6 +93,18 @@ default = {
             'on_start': []
         },
         {
+            'class': 'NoodleCommunity',
+            'key': "anonymous id",
+            'walkers': [{
+                'strategy': "RandomWalk",
+                'peers': -1,
+                'init': {
+                }
+            }],
+            'initialize': {},
+            'on_start': []
+        },
+        {
             'class': 'AttestationCommunity',
             'key': "anonymous id",
             'walkers': [{

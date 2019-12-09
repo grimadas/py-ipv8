@@ -19,6 +19,7 @@ else:
     if __name__ == '__main__' or __name__ == 'ipv8_service':
         from ipv8.messaging.interfaces.statistics_endpoint import StatisticsEndpoint
         from ipv8.attestation.identity.community import IdentityCommunity
+        from ipv8.attestation.noodle.community import NoodleCommunity, NoodleTestnetCommunity
         from ipv8.attestation.trustchain.community import TrustChainCommunity, TrustChainTestnetCommunity
         from ipv8.attestation.wallet.community import AttestationCommunity
         from ipv8.keyvault.crypto import default_eccrypto
@@ -35,6 +36,7 @@ else:
     else:
         from .ipv8.messaging.interfaces.statistics_endpoint import StatisticsEndpoint
         from .ipv8.attestation.identity.community import IdentityCommunity
+        from .ipv8.attestation.noodle.community import NoodleCommunity, NoodleTestnetCommunity
         from .ipv8.attestation.trustchain.community import TrustChainCommunity, TrustChainTestnetCommunity
         from .ipv8.attestation.wallet.community import AttestationCommunity
         from .ipv8.keyvault.crypto import default_eccrypto
@@ -58,6 +60,8 @@ else:
         'TunnelCommunity': TunnelCommunity,
         'DHTDiscoveryCommunity': DHTDiscoveryCommunity,
         'TrustChainTestnetCommunity': TrustChainTestnetCommunity,
+        'NoodleCommunity': NoodleCommunity,
+        'NoodleTestnetCommunity': NoodleTestnetCommunity
     }
 
     _WALKERS = {
