@@ -64,8 +64,8 @@ class NoodleCommunity(Community):
     """
     Community for secure payments.
     """
-    master_peer = Peer(unhexlify("4c69624e61434c534b3a0152a7f0e21c3e0a36b14bea6794ca3731d49778e0a6dd388dc086e9206e8"
-                                 "621c8bbb569ef8577367bf7f42a3268951c5e2355756b89fa3003182e1cb09a418b"))
+    master_peer = Peer(unhexlify("4c69624e61434c504b3abbdfd630d79addbadf05006909d1ab80326f22d8d2f3ac66c0b7566ca4c0d"
+                                 "c6efe35f8a7a9d895d2d48430f0b91a5541e3447f816ecca0f50f3508118db9a405"))
 
     UNIVERSAL_BLOCK_LISTENER = b'UNIVERSAL_BLOCK_LISTENER'
     DB_CLASS = NoodleDB
@@ -1327,5 +1327,5 @@ class NoodleTestnetCommunity(NoodleCommunity):
     """
     DB_NAME = 'noodle_testnet'
 
-    master_peer = Peer(unhexlify("4c69624e61434c534b3a046327c417ebb27a0ea44a896017ea013628127d127e04e5a23542aa4822"
-                                 "8248d36baed46fb0a51056fa2a54e4bae4e338f0e5a42b3f87f66403a84b4d80aa9b"))
+    master_peer = Peer(unhexlify("4c69624e61434c504b3ad66fc4e9f6ee381fa5087670072c0de751060076c65a123f616092c7abc84"
+                                 "11616b82a5d420f9f41307c742bc1457fb03dc7ae342bd8d3c1fe48191b7b44664b"))
