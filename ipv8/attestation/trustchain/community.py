@@ -893,11 +893,15 @@ class TrustChainCommunity(Community):
         peer_id = self.persistence.int_to_id(payload.crawl_id)
         prev_balance = self.persistence.get_balance(peer_id)
         self.logger.info("Dump chain for %s, balance before is %s", peer_id, prev_balance)
-        res = self.persistence.dump_peer_status(peer_id, orjson.loads(payload.chain))
+        status = orjson.loads(payload.chain)
+        res = self.persistence.dump_peer_status(peer_id, status)
         after_balance = self.persistence.get_balance(peer_id)
         self.logger.info("Dump chain for %s, balance after is %s", peer_id, after_balance)
         if after_balance < 0:
-            self.logger.error("Balance if still negative!  %s", orjson.loads(payload.chain))
+            self.logger.error("Balance if still negative!  %s", status)
+        else:
+            seq_num = status['seq_num']
+            self.persistence.add_peer_proofs(peer_id, seq_num, status, None)
         if cache:
             cache.received_empty_response()
         else:
@@ -1283,10 +1287,8 @@ class TrustChainCommunity(Community):
             self.ipv8.overlays.append(community)
             # Discover and connect to everyone for 50 seconds
             self.pex[peer.mid] = community
-            # index = len(self.ipv8.overlays)
-            # self.pex_map[peer.mid] = index
             if self.bootstrap_master:
-                self.logger.info('Proceed with a bootstrap master')
+                self.logger.warning('Proceed with a bootstrap master, walking to %s peers', len(self.bootstrap_master))
                 for k in self.bootstrap_master:
                     community.walk_to(k)
             else:
