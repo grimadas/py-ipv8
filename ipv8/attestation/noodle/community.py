@@ -66,6 +66,8 @@ class NoodleCommunity(Community):
     """
     master_peer = Peer(unhexlify("4c69624e61434c504b3abbdfd630d79addbadf05006909d1ab80326f22d8d2f3ac66c0b7566ca4c0d"
                                  "c6efe35f8a7a9d895d2d48430f0b91a5541e3447f816ecca0f50f3508118db9a405"))
+    minter_peer = Peer(unhexlify("4c69624e61434c504b3a6ddcd9ce2c463c87b0899187975b9dc6322e193c7c891c7b6841015fa3b16"
+                                 "40d7783a710053f551073271f511944e48d73fbb7928e3e0037f6611cf22a97e21f"))
 
     UNIVERSAL_BLOCK_LISTENER = b'UNIVERSAL_BLOCK_LISTENER'
     DB_CLASS = NoodleDB
@@ -118,6 +120,14 @@ class NoodleCommunity(Community):
         orig_db = self.persistence
         self.persistence = NoodleMemoryDatabase(working_directory, db_name)
         self.persistence.original_db = orig_db
+
+        # Add the system minter
+        self.known_graph.add_node(self.minter_peer.public_key.key_to_bin(), minter=True)
+
+        # If we are the system minter, init the community
+        if self.my_peer == self.minter_peer:
+            self._logger.info("I am the system minter - init our own community")
+            self.init_minter_community()
 
     def transfer(self, dest_peer, spend_value):
         self._logger.debug("Making spend to peer %s (value: %f)", dest_peer, spend_value)
