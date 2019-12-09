@@ -43,6 +43,13 @@ class TestNoodleCommunityBase(TestBase):
         for node in self.nodes:
             node.overlay.add_listener(TestBlockListener(), [b'spend', b'claim'])
 
+        # Make sure everyone knows the minter (first peer)
+        for node_ind in range(1, len(self.nodes)):
+            minter_pk = self.nodes[0].overlay.my_peer.public_key.key_to_bin()
+            self.nodes[node_ind].overlay.known_graph.add_node(minter_pk, minter=True)
+
+        self.nodes[0].overlay.init_minter_community()
+
     def create_node(self):
         ipv8 = MockIPv8(u"curve25519", NoodleCommunity, working_directory=u":memory:")
         ipv8.overlay.ipv8 = ipv8
@@ -97,6 +104,24 @@ class TestNoodleCommunityTwoNodes(TestNoodleCommunityBase):
         my_pk = self.nodes[1].overlay.my_peer.public_key.key_to_bin()
         my_id = self.nodes[1].overlay.persistence.key_to_id(my_pk)
         self.assertEqual(self.nodes[1].overlay.persistence.get_balance(my_id), 10)
+
+    @inlineCallbacks
+    def test_request_mint_value(self):
+        """
+        Test asking a minter for value.
+        """
+        yield self.introduce_nodes()
+        self.nodes[1].overlay.ask_minters_for_funds()
+        yield self.sleep(0.2)
+
+        my_pk = self.nodes[1].overlay.my_peer.public_key.key_to_bin()
+        my_id = self.nodes[1].overlay.persistence.key_to_id(my_pk)
+        self.assertEqual(self.nodes[1].overlay.persistence.get_balance(my_id), 10000)
+
+        # The minter should end up with a balance of 0
+        my_pk = self.nodes[0].overlay.my_peer.public_key.key_to_bin()
+        my_id = self.nodes[0].overlay.persistence.key_to_id(my_pk)
+        self.assertEqual(self.nodes[0].overlay.persistence.get_balance(my_id), 0)
 
     @inlineCallbacks
     def test_transfer_overspend(self):
@@ -165,16 +190,6 @@ class TestNoodleCommunityThreeNodes(TestNoodleCommunityBase):
 
 class TestNoodleCommunityTwoNodesAudits(TestNoodleCommunityBase):
     __testing__ = True
-
-    def setUp(self):
-        super(TestNoodleCommunityTwoNodesAudits, self).setUp()
-
-        # Make sure everyone knows the minter (first peer)
-        for node_ind in range(1, len(self.nodes)):
-            minter_pk = self.nodes[0].overlay.my_peer.public_key.key_to_bin()
-            self.nodes[node_ind].overlay.known_graph.add_node(minter_pk, minter=True)
-
-        self.nodes[0].overlay.init_minter_community()
 
     def create_node(self):
         settings = NoodleSettings()

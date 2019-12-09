@@ -58,4 +58,7 @@ class NoodleSettings(object):
         self.risk = 0.5
 
         # Initial minting value
-        self.initial_mint_value = 1000
+        self.initial_mint_value = 100000
+
+        # Interval for making random transfers
+        self.transfer_interval = 30

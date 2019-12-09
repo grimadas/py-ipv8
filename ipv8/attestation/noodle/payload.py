@@ -98,6 +98,26 @@ class EmptyCrawlResponsePayload(Payload):
         return EmptyCrawlResponsePayload(crawl_id)
 
 
+class MintRequestPayload(Payload):
+    """
+    Payload for the message that asks the minter for funds.
+    """
+
+    format_list = ['I']
+
+    def __init__(self, mint_value):
+        super(MintRequestPayload, self).__init__()
+        self.mint_value = mint_value
+
+    def to_pack_list(self):
+        data = [('I', self.mint_value)]
+        return data
+
+    @classmethod
+    def from_unpack_list(cls, crawl_id):
+        return MintRequestPayload(crawl_id)
+
+
 class HalfBlockPayload(Payload):
     """
     Payload for message that ships a half block

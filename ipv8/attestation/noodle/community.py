@@ -94,10 +94,10 @@ class NoodleCommunity(Community):
         self.periodic_sync_lc = {}
 
         self.mem_db_flush_lc = None
+        self.transfer_lc = LoopingCall(self.make_random_transfer)
 
         self.ipv8 = kwargs.pop('ipv8', None)
         self.pex = {}
-        self.pex_map = {}
         self.bootstrap_master = None
         self.audit_requests = {}
 
@@ -113,7 +113,8 @@ class NoodleCommunity(Community):
             chr(9): self.received_peer_crawl_response,
             chr(10): self.received_audit_proofs,
             chr(11): self.received_audit_proofs_request,
-            chr(12): self.received_audit_request
+            chr(12): self.received_audit_request,
+            chr(13): self.received_mint_request
         })
 
         # Enable the memory database
@@ -128,6 +129,11 @@ class NoodleCommunity(Community):
         if self.my_peer == self.minter_peer:
             self._logger.info("I am the system minter - init our own community")
             self.init_minter_community()
+
+            # Mint if needed
+            my_id = self.persistence.key_to_id(self.my_peer.public_key.key_to_bin())
+            if self.persistence.get_balance(my_id) == 0:
+                self.mint(self.settings.initial_mint_value)
 
     def transfer(self, dest_peer, spend_value):
         self._logger.debug("Making spend to peer %s (value: %f)", dest_peer, spend_value)
@@ -144,6 +150,63 @@ class NoodleCommunity(Community):
             tx.update({'nonce': nonce, 'condition': condition})
         return self.sign_block(next_hop_peer, next_hop_peer.public_key.key_to_bin(), block_type=b'spend', transaction=tx)
 
+    def start_making_random_transfers(self):
+        """
+        Start to make random transfers to other peers.
+        """
+        self.transfer_lc.start(self.settings.transfer_interval)
+
+    def get_peer(self, pub_key):
+        for peer in self.get_peers():
+            if peer.public_key.key_to_bin() == pub_key:
+                return peer
+        return None
+
+    def ask_minters_for_funds(self, value=10000):
+        """
+        Ask the minters for funds.
+        """
+        known_minters = set(nx.get_node_attributes(self.known_graph, 'minter').keys())
+        for minter in known_minters:
+            minter_peer = self.get_peer(minter)
+            if not minter_peer:
+                return
+
+            global_time = self.claim_global_time()
+            auth = BinMemberAuthenticationPayload(self.my_peer.public_key.key_to_bin()).to_pack_list()
+            payload = MintRequestPayload(value).to_pack_list()
+            dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
+
+            packet = self._ez_pack(self._prefix, 13, [auth, dist, payload])
+            self._logger.info("Sending mint request to peer %s:%d", *minter_peer.address)
+            self.endpoint.send(minter_peer.address, packet)
+
+    def make_random_transfer(self):
+        """
+        Transfer funds to a random peer.
+        """
+        # Ask the minters for funds
+        my_pk = self.my_peer.public_key.key_to_bin()
+        my_id = self.persistence.key_to_id(my_pk)
+        my_balance = self.persistence.get_balance(my_id)
+
+        if my_balance < 0:
+            self.ask_minters_for_funds()
+            return
+
+        if not self.get_peers():
+            self._logger.info("No peers to make a payment to.")
+
+        rand_peer = random.choice(self.get_peers())
+
+        def on_success(_):
+            self._logger.info("Successfully made transfer to peer!")
+
+        def on_fail(failure):
+            self._logger.info("Failed to make payment to peer: %s", str(failure))
+
+        self.transfer(rand_peer, 1).addCallbacks(on_success, on_fail)
+
     def init_mem_db_flush(self, flush_time):
         if not self.mem_db_flush_lc:
             self.mem_db_flush_lc = self.register_task("mem_db_flush", LoopingCall(self.mem_db_flush))
@@ -156,7 +219,6 @@ class NoodleCommunity(Community):
         self.logger.info("Sync for the info peer with mid %s", hexlify(community_id))
         blk = self.persistence.get_latest_peer_block(community_id)
         val = self.pex[community_id].get_peers()
-        # val = self.ipv8.overlays[self.pex_map[peer_mid]].get_peers()
         if blk:
             self.send_block(blk, address_set=val)
         # Send also the last pairwise block to the peers
@@ -205,9 +267,11 @@ class NoodleCommunity(Community):
                         self.known_graph.remove_edge(source, random_path[1])
             return p
 
-    def mint(self):
+    def mint(self, value=None):
         self._logger.info("Minting initial value...")
-        mint = self.prepare_mint_transaction()
+        if not value:
+            value = self.settings.initial_mint_value
+        mint = self.prepare_mint_transaction(value)
         return self.self_sign_block(block_type=b'claim', transaction=mint)
 
     def prepare_spend_transaction(self, pub_key, spend_value, **kwargs):
@@ -231,13 +295,12 @@ class NoodleCommunity(Community):
             added.update(**kwargs)
             return peer, added
 
-    def prepare_mint_transaction(self):
+    def prepare_mint_transaction(self, value):
         minter = self.persistence.key_to_id(EMPTY_PK)
         pk = self.my_peer.public_key.key_to_bin()
         my_id = self.persistence.key_to_id(pk)
         total = self.persistence.get_total_pairwise_spends(minter, my_id)
-        mint_val = self.settings.initial_mint_value
-        transaction = {"value": mint_val, "mint_proof": True, "total_spend": total + mint_val}
+        transaction = {"value": value, "mint_proof": True, "total_spend": total + value}
         return transaction
 
     def do_db_cleanup(self):
@@ -934,6 +997,12 @@ class NoodleCommunity(Community):
         # Might be an active audit request -> verify the status/send chain tests
         self.perform_audit(peer.address, payload)
 
+    @synchronized
+    @lazy_wrapper(GlobalTimeDistributionPayload, MintRequestPayload)
+    def received_mint_request(self, peer, dist, payload):
+        self.mint(payload.mint_value)
+        self.transfer(peer, payload.mint_value)
+
     def get_all_communities_peers(self):
         peers = set()
         for mid in self.pex:
@@ -1307,7 +1376,6 @@ class NoodleCommunity(Community):
             # Discover and connect to everyone for 50 seconds
             self.pex[peer.mid] = community
             # index = len(self.ipv8.overlays)
-            # self.pex_map[peer.mid] = index
             if self.bootstrap_master:
                 self.logger.info('Proceed with a bootstrap master')
                 for k in self.bootstrap_master:
@@ -1327,6 +1395,8 @@ class NoodleCommunity(Community):
         for mid in self.pex:
             if mid in self.periodic_sync_lc and self.periodic_sync_lc[mid].running:
                 self.periodic_sync_lc[mid].stop()
+        if self.transfer_lc and self.transfer_lc.running:
+            self.transfer_lc.stop()
 
         super(NoodleCommunity, self).unload()
 
