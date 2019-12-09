@@ -6,7 +6,7 @@ from binascii import hexlify
 import networkx as nx
 from six.moves import xrange
 
-from ipv8.attestation.trustchain.block import TrustChainBlock, EMPTY_PK
+from .block import NoodleBlock, EMPTY_PK
 
 KEY_LEN = 8
 
@@ -41,7 +41,7 @@ class NoodleMemoryDatabase(object):
         self.total_claim_sum = {}
 
     def key_to_id(self, key):
-        return str(hexlify(key)[-KEY_LEN:])[2:-1]
+        return hexlify(key)[-KEY_LEN:].decode()
 
     def id_to_int(self, id):
         return int(id, 16)
@@ -66,7 +66,7 @@ class NoodleMemoryDatabase(object):
         Get the block class for a specific block type.
         """
         if block_type not in self.block_types:
-            return TrustChainBlock
+            return NoodleBlock
 
         return self.block_types[block_type]
 

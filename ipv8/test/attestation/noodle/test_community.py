@@ -76,7 +76,7 @@ class TestNoodleCommunityTwoNodes(TestNoodleCommunityBase):
         def on_failure(exc):
             self.assertEqual(exc.type, NoPathFoundException)
 
-        self.nodes[0].overlay.persistence.get_balance = lambda *_, verified=True: 10000
+        self.nodes[0].overlay.persistence.get_balance = lambda _, verified=True: 10000
         return self.nodes[0].overlay.transfer(self.nodes[1].overlay.my_peer, 100).addCallbacks(on_success, on_failure)
 
     @inlineCallbacks
@@ -103,7 +103,7 @@ class TestNoodleCommunityTwoNodes(TestNoodleCommunityBase):
         Test an overspend transaction.
         """
         yield self.introduce_nodes()
-        self.nodes[0].overlay.persistence.get_balance = lambda *_, verified=True: 10000
+        self.nodes[0].overlay.persistence.get_balance = lambda _, verified=True: 10000
         self.nodes[0].overlay.transfer(self.nodes[1].overlay.my_peer, 10)
         yield self.sleep(0.3)
 
@@ -151,7 +151,7 @@ class TestNoodleCommunityThreeNodes(TestNoodleCommunityBase):
         yield self.introduce_nodes()
         yield self.nodes[0].overlay.mint()
         yield self.nodes[0].overlay.transfer(self.nodes[1].overlay.my_peer, 10)
-        self.nodes[1].overlay.persistence.get_balance = lambda *_, verified=True: 10000
+        self.nodes[1].overlay.persistence.get_balance = lambda _, verified=True: 10000
         self.nodes[1].overlay.transfer(self.nodes[2].overlay.my_peer, 11)
 
         yield self.sleep(0.3)

@@ -11,7 +11,7 @@ from functools import wraps
 from threading import RLock
 
 import networkx as nx
-import orjson
+import ujson as json
 from twisted.internet import reactor
 from twisted.internet.defer import Deferred, fail, inlineCallbacks, maybeDeferred, returnValue, succeed
 from twisted.internet.task import LoopingCall
@@ -696,10 +696,8 @@ class NoodleCommunity(Community):
         crawl_id = self.persistence.id_to_int(from_peer)
         if not self.request_cache.has(u"crawl", crawl_id):
             # Need to get more information from the peer to verify the claim
-            # except_pack = orjson.dumps(list(self.persistence.get_known_chains(from_peer)))
-            #
             self.logger.info("Request the peer status and audit proofs %s:%s", crawl_id, last_block.sequence_number)
-            except_pack = orjson.dumps(list())
+            except_pack = json.dumps(list())
             if self.settings.security_mode == SecurityMode.VANILLA:
                 crawl_deferred = self.send_peer_crawl_request(crawl_id, peer,
                                                               last_block.sequence_number, except_pack)
@@ -713,8 +711,8 @@ class NoodleCommunity(Community):
         self.logger.info("Received audit proofs for block %s", block)
         if self.settings.security_mode == SecurityMode.VANILLA:
             return True
-        p1 = orjson.loads(proofs[0])
-        p2 = orjson.loads(proofs[1])
+        p1 = json.loads(proofs[0])
+        p2 = json.loads(proofs[1])
         if 'spends' in p1:
             pack_stat = proofs[0]
             pack_audit = proofs[1]
@@ -743,7 +741,7 @@ class NoodleCommunity(Community):
     def finalize_audits(self, audit_seq, status, audits):
         self.logger.info("Audit with seq number %s finalized", audit_seq)
         full_audit = dict(audits)
-        packet = orjson.dumps(full_audit)
+        packet = json.dumps(full_audit)
         # Update database audit proofs
         my_id = self.persistence.key_to_id(self.my_peer.public_key.key_to_bin())
         self.persistence.add_peer_proofs(my_id, audit_seq, status, packet)
@@ -794,7 +792,7 @@ class NoodleCommunity(Community):
 
     @synchronized
     @lazy_wrapper_unsigned_wd(GlobalTimeDistributionPayload, PeerCrawlRequestPayload)
-    def received_audit_proofs_request(self, source_address, dist, payload: PeerCrawlRequestPayload, data):
+    def received_audit_proofs_request(self, source_address, dist, payload, data):
         # get last collected audit proof
         my_id = self.persistence.key_to_id(self.my_peer.public_key.key_to_bin())
         pack = self.persistence.get_peer_proofs(my_id, int(payload.seq_num))
@@ -820,7 +818,7 @@ class NoodleCommunity(Community):
         self.request_cache.add(CrawlRequestCache(self, audit_id, crawl_deferred, total_blocks=2))
 
         global_time = self.claim_global_time()
-        payload = PeerCrawlRequestPayload(seq_num, audit_id, orjson.dumps(list())).to_pack_list()
+        payload = PeerCrawlRequestPayload(seq_num, audit_id, json.dumps(list())).to_pack_list()
         dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
 
         packet = self._ez_pack(self._prefix, 11, [dist, payload], False)
@@ -834,7 +832,7 @@ class NoodleCommunity(Community):
         if cache:
             if 'status' in cache.added:
                 # status is known => This is audit collection initiated by my peer
-                audit = orjson.loads(payload.chain)
+                audit = json.loads(payload.chain)
                 status = cache.added['status']
                 # TODO: if audit not valid/resend with bigger peer set
                 for v in audit.items():
@@ -868,7 +866,7 @@ class NoodleCommunity(Community):
     def perform_audit(self, source_address, audit_request):
         peer_id = self.persistence.int_to_id(audit_request.crawl_id)
         # Put audit status into the local db
-        peer_status = orjson.loads(audit_request.chain)
+        peer_status = json.loads(audit_request.chain)
         res = self.persistence.dump_peer_status(peer_id, peer_status)
         if res:
             # Create an audit proof for the this sequence
@@ -877,24 +875,24 @@ class NoodleCommunity(Community):
             audit = {}
             my_id = hexlify(self.my_peer.public_key.key_to_bin()).decode()
             audit[my_id] = hexlify(sign).decode()
-            self.send_audit_proofs(source_address, audit_request.crawl_id, orjson.dumps(audit))
+            self.send_audit_proofs(source_address, audit_request.crawl_id, json.dumps(audit))
         else:
             # This is invalid audit request, refusing to sign
             self.logger.error("Received invalid audit request id %s", audit_request.crawl_id)
 
     @synchronized
     @lazy_wrapper(GlobalTimeDistributionPayload, PeerCrawlResponsePayload)
-    def received_peer_crawl_response(self, peer, dist, payload: PeerCrawlResponsePayload):
+    def received_peer_crawl_response(self, peer, dist, payload):
 
         cache = self.request_cache.get(u"crawl", payload.crawl_id)
         peer_id = self.persistence.int_to_id(payload.crawl_id)
         prev_balance = self.persistence.get_balance(peer_id)
         self.logger.info("Dump chain for %s, balance before is %s", peer_id, prev_balance)
-        res = self.persistence.dump_peer_status(peer_id, orjson.loads(payload.chain))
+        res = self.persistence.dump_peer_status(peer_id, json.loads(payload.chain))
         after_balance = self.persistence.get_balance(peer_id)
         self.logger.info("Dump chain for %s, balance after is %s", peer_id, after_balance)
         if after_balance < 0:
-            self.logger.error("Balance if still negative!  %s", orjson.loads(payload.chain))
+            self.logger.error("Balance if still negative!  %s", json.loads(payload.chain))
         if cache:
             cache.received_empty_response()
         else:
@@ -904,17 +902,17 @@ class NoodleCommunity(Community):
 
     @synchronized
     @lazy_wrapper(GlobalTimeDistributionPayload, PeerCrawlResponsePayload)
-    def received_audit_request(self, peer, dist, payload: PeerCrawlResponsePayload):
+    def received_audit_request(self, peer, dist, payload):
 
         cache = self.request_cache.get(u"crawl", payload.crawl_id)
         peer_id = self.persistence.int_to_id(payload.crawl_id)
         prev_balance = self.persistence.get_balance(peer_id)
         self.logger.info("Dump chain for %s, balance before is %s", peer_id, prev_balance)
-        res = self.persistence.dump_peer_status(peer_id, orjson.loads(payload.chain))
+        res = self.persistence.dump_peer_status(peer_id, json.loads(payload.chain))
         after_balance = self.persistence.get_balance(peer_id)
         self.logger.info("Dump chain for %s, balance after is %s", peer_id, after_balance)
         if after_balance < 0:
-            self.logger.error("Balance if still negative!  %s", orjson.loads(payload.chain))
+            self.logger.error("Balance if still negative!  %s", json.loads(payload.chain))
 
         self.logger.info("Received audit request %s from %s:%d", payload.crawl_id, peer.address[0], peer.address[1])
         # Might be an active audit request -> verify the status/send chain tests
@@ -955,11 +953,11 @@ class NoodleCommunity(Community):
         self.endpoint.send(peer.address, packet)
 
     def form_peer_status_response(self, public_key):
-        return orjson.dumps(self.persistence.get_peer_status(public_key))
+        return json.dumps(self.persistence.get_peer_status(public_key))
 
     @synchronized
     @lazy_wrapper(GlobalTimeDistributionPayload, PeerCrawlRequestPayload)
-    def received_peer_crawl_request(self, peer, dist, payload: PeerCrawlRequestPayload):
+    def received_peer_crawl_request(self, peer, dist, payload):
         # Need to convince peer with minimum number of blocks send
         # Get latest pairwise blocks/ including self claims
         my_key = self.my_peer.public_key.key_to_bin()
@@ -967,7 +965,6 @@ class NoodleCommunity(Community):
         peer_id = self.persistence.int_to_id(payload.crawl_id)
         if peer_id != my_id:
             self.logger.error("Peer requests not my peer status %s", peer_id)
-        pack_except = set(orjson.loads(payload.pack_except))
         s1 = self.form_peer_status_response(my_key)
         self.logger.info("Received peer crawl from node %s for range, sending status len %s",
                          hexlify(peer.public_key.key_to_bin())[-8:], len(s1))
