@@ -17,6 +17,9 @@ class MockIPv8(object):
         self.endpoint = AutoMockEndpoint()
         self.endpoint.open()
 
+        self.overlays = []
+        self.strategies = []
+
         # Enable statistics
         if enable_statistics:
             self.endpoint = StatisticsEndpoint(self, self.endpoint)
@@ -30,15 +33,18 @@ class MockIPv8(object):
             self.trustchain = TrustChainCommunity(self.my_peer, self.endpoint, self.network,
                                                   working_directory=u":memory:")
             kwargs.update({'trustchain': self.trustchain})
+            self.overlays.append(self.trustchain)
 
         # Load a DHT community if specified
         self.dht = None
         if create_dht:
             self.dht = DHTDiscoveryCommunity(self.my_peer, self.endpoint, self.network)
             kwargs.update({'dht': self.dht})
+            self.overlays.append(self.dht)
 
         self.overlay = overlay_class(self.my_peer, self.endpoint, self.network, *args, **kwargs)
         self.overlay._use_main_thread = False
+        self.overlays.append(self.overlay)
         self.discovery = MockWalk(self.overlay)
 
         self.overlay.my_estimated_wan = self.endpoint.wan_address

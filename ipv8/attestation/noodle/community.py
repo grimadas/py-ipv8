@@ -1237,9 +1237,6 @@ class NoodleCommunity(Community):
     def defered_sync_start(self, mid):
         self.periodic_sync_lc[mid].start(self.settings.sync_time)
 
-    def defered_sync_stop(self, mid):
-        self.periodic_sync_lc[mid].stop()
-
     def build_security_community(self, community_mid):
         # Start sync task after the discovery
         task = self.trustchain_sync \
@@ -1315,7 +1312,8 @@ class NoodleCommunity(Community):
         if self.mem_db_flush_lc:
             self.mem_db_flush_lc.stop()
         for mid in self.pex:
-            self.defered_sync_stop(mid)
+            if mid in self.periodic_sync_lc and self.periodic_sync_lc[mid].running:
+                self.periodic_sync_lc[mid].stop()
 
         super(NoodleCommunity, self).unload()
 

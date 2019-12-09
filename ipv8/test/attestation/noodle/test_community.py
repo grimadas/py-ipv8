@@ -166,6 +166,16 @@ class TestNoodleCommunityThreeNodes(TestNoodleCommunityBase):
 class TestNoodleCommunityTwoNodesAudits(TestNoodleCommunityBase):
     __testing__ = True
 
+    def setUp(self):
+        super(TestNoodleCommunityTwoNodesAudits, self).setUp()
+
+        # Make sure everyone knows the minter (first peer)
+        for node_ind in range(1, len(self.nodes)):
+            minter_pk = self.nodes[0].overlay.my_peer.public_key.key_to_bin()
+            self.nodes[node_ind].overlay.known_graph.add_node(minter_pk, minter=True)
+
+        self.nodes[0].overlay.init_minter_community()
+
     def create_node(self):
         settings = NoodleSettings()
         settings.security_mode = SecurityMode.AUDIT
@@ -181,6 +191,25 @@ class TestNoodleCommunityTwoNodesAudits(TestNoodleCommunityBase):
         """
         self.nodes[1].overlay.settings.risk = 1
 
+        yield self.introduce_nodes()
+        yield self.nodes[0].overlay.mint()
+        yield self.sleep(0.1)  # To allow the receivers of the mint block to update their caches
+        yield self.nodes[0].overlay.transfer(self.nodes[1].overlay.my_peer, 10)
+
+        my_pk = self.nodes[0].overlay.my_peer.public_key.key_to_bin()
+        my_id = self.nodes[0].overlay.persistence.key_to_id(my_pk)
+        self.assertEqual(self.nodes[0].overlay.persistence.get_balance(my_id),
+                         self.nodes[0].overlay.settings.initial_mint_value - 10)
+
+        my_pk = self.nodes[1].overlay.my_peer.public_key.key_to_bin()
+        my_id = self.nodes[1].overlay.persistence.key_to_id(my_pk)
+        self.assertEqual(self.nodes[1].overlay.persistence.get_balance(my_id), 10)
+
+    @inlineCallbacks
+    def test_transfer_no_risk(self):
+        """
+        Test a successful transfer with audits and no risk.
+        """
         yield self.introduce_nodes()
         yield self.nodes[0].overlay.mint()
         yield self.sleep(0.1)  # To allow the receivers of the mint block to update their caches
