@@ -1259,6 +1259,10 @@ class NoodleCommunity(Community):
             self.build_security_community(self.my_peer.mid)
 
     @synchronized
+    def introduction_request_callback(self, peer, dist, payload):
+        self.form_subtrust_community(peer)
+
+    @synchronized
     def introduction_response_callback(self, peer, dist, payload):
         chain_length = None
         if payload.extra_bytes:
@@ -1266,23 +1270,7 @@ class NoodleCommunity(Community):
 
         if peer.address in self.network.blacklist:  # Do not crawl addresses in our blacklist (trackers)
             return
-        known_minters = set(nx.get_node_attributes(self.known_graph, 'minter').keys())
-        if not self.ipv8:
-            self.logger.warning('No IPv8 service object available, cannot start PEXCommunity')
-        elif peer.public_key.key_to_bin() in known_minters and peer.mid not in self.pex:
-            community = SubTrustCommunity(self.my_peer, self.ipv8.endpoint, Network(), mid=peer.mid, max_peers=-1)
-            self.ipv8.overlays.append(community)
-            # Discover and connect to everyone for 50 seconds
-            self.pex[peer.mid] = community
-            # index = len(self.ipv8.overlays)
-            # self.pex_map[peer.mid] = index
-            if self.bootstrap_master:
-                self.logger.info('Proceed with a bootstrap master')
-                for k in self.bootstrap_master:
-                    community.walk_to(k)
-            else:
-                self.ipv8.strategies.append((RandomWalk(community), -1))
-            self.build_security_community(peer.mid)
+        self.form_subtrust_community(peer)
 
         # Check if we have pending crawl requests for this peer
         has_intro_crawl = self.request_cache.has(u"introcrawltimeout", IntroCrawlTimeout.get_number_for(peer))
@@ -1298,6 +1286,25 @@ class NoodleCommunity(Community):
             if known_blocks < 1000 or random.random() > 0.5:
                 self.request_cache.add(IntroCrawlTimeout(self, peer))
                 self.crawl_lowest_unknown(peer, latest_block_num=chain_length)
+
+    def form_subtrust_community(self, peer):
+        known_minters = set(nx.get_node_attributes(self.known_graph, 'minter').keys())
+        if not self.ipv8:
+            self.logger.warning('No IPv8 service object available, cannot start SubTrustCommunity')
+        elif peer.public_key.key_to_bin() in known_minters and peer.mid not in self.pex:
+            community = SubTrustCommunity(self.my_peer, self.ipv8.endpoint, Network(), mid=peer.mid, max_peers=-1)
+            self.ipv8.overlays.append(community)
+            # Discover and connect to everyone for 50 seconds
+            self.pex[peer.mid] = community
+            # index = len(self.ipv8.overlays)
+            # self.pex_map[peer.mid] = index
+            if self.bootstrap_master:
+                self.logger.info('Proceed with a bootstrap master')
+                for k in self.bootstrap_master:
+                    community.walk_to(k)
+            else:
+                self.ipv8.strategies.append((RandomWalk(community), -1))
+            self.build_security_community(peer.mid)
 
     def unload(self):
         self.logger.debug("Unloading the Noodle Community.")
