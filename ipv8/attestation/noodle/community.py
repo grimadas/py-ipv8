@@ -127,7 +127,7 @@ class NoodleCommunity(Community):
 
             # Mint if needed
             my_id = self.persistence.key_to_id(self.my_peer.public_key.key_to_bin())
-            if self.persistence.get_balance(my_id) == 0:
+            if self.persistence.get_balance(my_id) <= 0:
                 self.mint(self.settings.initial_mint_value)
 
     def transfer(self, dest_peer, spend_value):
@@ -178,16 +178,16 @@ class NoodleCommunity(Community):
             self._logger.info("Sending mint request to peer %s:%d", *minter_peer.address)
             self.endpoint.send(minter_peer.address, packet)
 
+    def get_my_balance(self):
+        my_pk = self.my_peer.public_key.key_to_bin()
+        my_id = self.persistence.key_to_id(my_pk)
+        return self.persistence.get_balance(my_id)
+
     def make_random_transfer(self):
         """
         Transfer funds to a random peer.
         """
-        # Ask the minters for funds
-        my_pk = self.my_peer.public_key.key_to_bin()
-        my_id = self.persistence.key_to_id(my_pk)
-        my_balance = self.persistence.get_balance(my_id)
-
-        if my_balance <= 0:
+        if self.get_my_balance() <= 0:
             self.ask_minters_for_funds()
             return
 
@@ -278,9 +278,8 @@ class NoodleCommunity(Community):
         """
         my_pk = self.my_peer.public_key.key_to_bin()
         my_id = self.persistence.key_to_id(my_pk)
-        my_balance = self.persistence.get_balance(my_id)
 
-        if my_balance < spend_value:
+        if self.get_my_balance() < spend_value:
             raise InsufficientBalanceException("Insufficient balance.")
         else:
             peer = self.get_hop_to_peer(pub_key)
