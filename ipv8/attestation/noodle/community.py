@@ -88,6 +88,7 @@ class NoodleCommunity(Community):
         db_name = kwargs.pop('db_name', self.DB_NAME)
         self.settings = kwargs.pop('settings', NoodleSettings())
         self.receive_block_lock = RLock()
+        self.ipv8 = kwargs.pop('ipv8', None)
         super(NoodleCommunity, self).__init__(*args, **kwargs)
         self.request_cache = RequestCache()
         self.logger = logging.getLogger(self.__class__.__name__)
@@ -105,7 +106,6 @@ class NoodleCommunity(Community):
         self.mem_db_flush_lc = None
         self.transfer_lc = LoopingCall(self.make_random_transfer)
 
-        self.ipv8 = kwargs.pop('ipv8', None)
         self.pex = {}
         self.bootstrap_master = None
         self.audit_requests = {}
