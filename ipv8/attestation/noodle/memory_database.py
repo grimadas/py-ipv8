@@ -4,6 +4,7 @@ import logging
 import os
 import time
 from binascii import hexlify
+from hashlib import sha1
 
 import networkx as nx
 from six.moves import xrange
@@ -58,6 +59,9 @@ class NoodleMemoryDatabase(object):
                     self.latest_blocks[block.public_key] = block
                 elif self.latest_blocks[block.public_key].sequence_number < block.sequence_number:
                     self.latest_blocks[block.public_key] = block
+
+                peer_mid = sha1(block.public_key).digest()
+                self.peer_map[peer_mid] = block.public_key
 
     def key_to_id(self, key):
         return hexlify(key)[-KEY_LEN:].decode()
