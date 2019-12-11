@@ -130,12 +130,11 @@ class TrustChainCommunity(Community):
 
     def trustchain_sync(self, community_id):
         self.logger.info("Sync for the info peer  %s", community_id)
-        blk = self.persistence.get_latest_peer_block(community_id)
+        blk = self.persistence.get_latest_peer_block_by_mid(community_id)
         val = self.pex[community_id].get_peers()
-        # val = self.ipv8.overlays[self.pex_map[peer_mid]].get_peers()
         if blk:
             self.send_block(blk, address_set=val)
-        # Send also the last pairwise block to the peers
+        # Send also the last claim done with this peer
         if community_id in self.persistence.peer_map:
             blk = self.persistence.get_last_pairwise_block(self.persistence.peer_map[community_id],
                                                            self.my_peer.public_key.key_to_bin())
@@ -714,6 +713,10 @@ class TrustChainCommunity(Community):
 
         return default_eccrypto.is_valid_signature(pub_key, status, sign)
 
+    def triger_security_alert(self, peer_id, errors):
+        tx = {'errors': errors, 'peer': peer_id}
+        self.self_sign_block(block_type=b'alert', transaction=tx)
+
     def validate_audit_proofs(self, proofs, block, peer):
         self.logger.info("Received audit proofs for block %s", block)
         if self.settings.security_mode == SecurityMode.VANILLA:
@@ -745,7 +748,7 @@ class TrustChainCommunity(Community):
         if result == ValidationResult.invalid:
             # Alert: Peer is provably hiding a transaction
             self.logger.error("Peer is hiding transactions  %s", result.errors)
-            # TODO: send alert to other known peers
+            self.triger_security_alert(peer_id, result.errors)
             return False
         res = self.persistence.dump_peer_status(peer_id, status)
         self.persistence.add_peer_proofs(peer_id, status['seq_num'], status, pack_audit)
@@ -875,7 +878,7 @@ class TrustChainCommunity(Community):
         if result.state == ValidationResult.invalid:
             # Alert: Peer is provably hiding a transaction
             self.logger.error("Peer is hiding transactions  %s", result.errors)
-            # TODO: send alert to other known peers
+            self.triger_security_alert(peer_id, result.errors)
         else:
             if self.persistence.dump_peer_status(peer_id, peer_status):
                 # Create an audit proof for the this sequence
@@ -909,7 +912,6 @@ class TrustChainCommunity(Community):
 
         packet = self._ez_pack(self._prefix, 12, [auth, dist, payload])
         self.endpoint.send(peer.address, packet)
-
 
     def get_all_communities_peers(self):
         peers = set()
@@ -955,14 +957,16 @@ class TrustChainCommunity(Community):
             if result == ValidationResult.invalid:
                 # Alert: Peer is provably hiding a transaction
                 self.logger.error("Peer is hiding transactions  %s", result.errors)
-                # TODO: send alert to other known peers
+                self.triger_security_alert(peer_id, result.errors)
                 cache.received_empty_response()
             else:
                 res = self.persistence.dump_peer_status(peer_id, status)
+                if not res:
+                    self.logger.error("Status is ill-formed %s", status)
                 after_balance = self.persistence.get_balance(peer_id)
                 self.logger.info("Dump chain for %s, balance after is %s", peer_id, after_balance)
                 if after_balance < 0:
-                    self.logger.error("Balance if still negative!  %s", status)
+                    self.logger.error("Balance is still negative! %s", status)
                 else:
                     seq_num = status['seq_num']
                     self.persistence.add_peer_proofs(peer_id, seq_num, status, None)
