@@ -161,10 +161,12 @@ class NoodleCommunity(Community):
         """
         Ask the minters for funds.
         """
+        self._logger.info("Asking minters for funds (%d)", value)
         known_minters = set(nx.get_node_attributes(self.known_graph, 'minter').keys())
         for minter in known_minters:
             minter_peer = self.get_peer(minter)
             if not minter_peer:
+                self._logger.info("No minters available!")
                 return
 
             global_time = self.claim_global_time()
