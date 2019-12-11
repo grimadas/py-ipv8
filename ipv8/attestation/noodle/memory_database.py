@@ -418,7 +418,7 @@ class NoodleMemoryDatabase(object):
                 self.original_db.add_block(block)
 
     def write_work_graph(self):
-        if os.path.exists(self.working_directory):
+        if not self.working_directory or os.path.exists(self.working_directory):
             nx.write_gpickle(self.work_graph, self.graph_path)
 
     def close(self):
