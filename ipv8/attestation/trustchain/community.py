@@ -932,7 +932,7 @@ class TrustChainCommunity(Community):
             balance = self.persistence.get_total_pairwise_spends(peer_id, p)
             seq_num = self.persistence.get_last_pairwise_spend_num(peer_id, p)
             if balance > 0 and seq_num <= status['seq_num']:
-                if p not in status['spends'] or status['spends'][p] < balance:
+                if p not in status['spends'] or status['spends'][p][0] < balance:
                     # Alert, peer is hiding my transaction
                     result.err("Peer is hiding spend with peer {}".format(p))
             else:
