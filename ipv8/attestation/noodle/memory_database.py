@@ -393,6 +393,7 @@ class NoodleMemoryDatabase(object):
         return blocks
 
     def commit_block_times(self):
+        self.write_work_graph()
         with open(self.block_file, "a") as t_file:
             writer = csv.DictWriter(t_file, ['time', 'transaction', 'type', "seq_num", "link", 'from_id', 'to_id'])
             for block_id in self.block_time:
@@ -416,9 +417,12 @@ class NoodleMemoryDatabase(object):
             for block in my_blocks:
                 self.original_db.add_block(block)
 
-    def close(self):
+    def write_work_graph(self):
         if os.path.exists(self.working_directory):
             nx.write_gpickle(self.work_graph, self.graph_path)
+
+    def close(self):
+        self.write_work_graph()
 
         if self.original_db:
             self.original_db.close()
