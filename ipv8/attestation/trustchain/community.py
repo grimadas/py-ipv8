@@ -177,13 +177,6 @@ class TrustChainCommunity(Community):
                         self.logger.error("Got a path, but not connected! %s. Removing the edge ", random_path[1])
                         self.known_graph.remove_edge(source, random_path[1])
             return p
-        # for peer_mid, sub_com in self.pex.items():
-        #    p = sub_com.get_peer_by_pub_key(peer_pub_key)
-        #    if p:
-        #        # Connected through peer_mid
-        #        return self.get_peer_by_mid(peer_mid)
-        # Peer not found => choose randomly??
-        #
 
     def prepare_spend_transaction(self, pub_key, spend_value, **kwargs):
         # check the balance first
@@ -621,13 +614,12 @@ class TrustChainCommunity(Community):
             if not self.validate_audit_proofs(proofs, blk, peer):
                 return fail(RuntimeError("Block proofs are not valid, refusing to sign: %s" % blk))
 
-        # Check if we are waiting for this signature response
-        # self.update_notify(blk)
         link_block_id_int = int(hexlify(blk.linked_block_id), 16) % 100000000
         if self.request_cache.has(u'sign', link_block_id_int):
             cache = self.request_cache.pop(u'sign', link_block_id_int)
             # We cannot guarantee that we're on a reactor thread so make sure we do this Twisted stuff on the reactor.
             reactor.callFromThread(cache.sign_deferred.callback, (blk, self.persistence.get_linked(blk)))
+            # Waited for conditional transaction
             if 'condition' in blk.transaction and cache.from_peer:
                 # We need to answer to prev peer in the chain
                 if 'proof' in blk.transaction:
@@ -650,20 +642,22 @@ class TrustChainCommunity(Community):
 
         # determine if we want to sign this block
         return addCallback(self.should_sign(blk),
-                           lambda ss, blk=blk, proofs=proofs, peer=peer: self.on_should_sign_outcome(ss, blk, proofs, peer))
+                           lambda ss, blk=blk, proofs=proofs,
+                                  peer=peer: self.on_should_sign_outcome(ss, blk, proofs, peer))
 
     def on_should_sign_outcome(self, should_sign, blk, proofs, peer):
         if not should_sign:
             self.logger.info("Not signing block %s", blk)
             return succeed(None)
-        #   or (self.persistence.get_last_seq_num(peer_id) < blk.sequence_number
-        #    and random.random() > self.settings.risk)
         peer_id = self.persistence.key_to_id(blk.public_key)
         if blk.type == b'spend':
+            # Request proofs from the peer if:
+            #  1) If estimated balance less than zero
+            #  2) If no proofs attached, no recent local proofs and depending on risk
             if self.persistence.get_balance(peer_id) < 0 or \
-                        (not proofs and
-                         not self.persistence.get_peer_proofs(peer_id, blk.sequence_number) and
-                         random.random() > self.settings.risk):
+                    (not proofs and
+                     not self.persistence.get_peer_proofs(peer_id, blk.sequence_number) and
+                     random.random() > self.settings.risk):
                 crawl_deferred = self.validate_claims(blk, peer)
                 return addCallback(crawl_deferred, lambda audit_proofs: self.process_half_block(blk, peer,
                                                                                                 audit_proofs))
@@ -713,6 +707,13 @@ class TrustChainCommunity(Community):
         else:
             return self.request_cache.get(u'crawl', crawl_id).crawl_deferred
 
+    def verify_audit(self, status, audit):
+        # This is a claim of a conditional transaction
+        pub_key = default_eccrypto.key_from_public_bin(unhexlify(audit[0]))
+        sign = unhexlify(audit[1])
+
+        return default_eccrypto.is_valid_signature(pub_key, status, sign)
+
     def validate_audit_proofs(self, proofs, block, peer):
         self.logger.info("Received audit proofs for block %s", block)
         if self.settings.security_mode == SecurityMode.VANILLA:
@@ -740,6 +741,12 @@ class TrustChainCommunity(Community):
 
         peer_id = self.persistence.key_to_id(block.public_key)
         # Put audit status into the local db
+        result = self.verify_peer_status(peer_id, status)
+        if result == ValidationResult.invalid:
+            # Alert: Peer is provably hiding a transaction
+            self.logger.error("Peer is hiding transactions  %s", result.errors)
+            # TODO: send alert to other known peers
+            return False
         res = self.persistence.dump_peer_status(peer_id, status)
         self.persistence.add_peer_proofs(peer_id, status['seq_num'], status, pack_audit)
         return res
@@ -843,19 +850,9 @@ class TrustChainCommunity(Community):
                 # TODO: if audit not valid/resend with bigger peer set
                 for v in audit.items():
                     cache.received_block(v)
-                    # if not self.verify_audit(status, v):
-                    #    self.logger.error("Received not valid audit %s %s", audit,
-                    #                      payload.crawl_id)
             else:
                 # Status is unknown - request status from the collector
                 cache.received_block(payload.chain)
-
-    def verify_audit(self, status, audit):
-        # This is a claim of a conditional transaction
-        pub_key = default_eccrypto.key_from_public_bin(unhexlify(audit[0]))
-        sign = unhexlify(audit[1])
-
-        return default_eccrypto.is_valid_signature(pub_key, status, sign)
 
     def send_audit_proofs(self, address, audit_id, audit_proofs):
         """
@@ -871,83 +868,34 @@ class TrustChainCommunity(Community):
 
     def perform_audit(self, source_address, audit_request):
         peer_id = self.persistence.int_to_id(audit_request.crawl_id)
-        # Put audit status into the local db
+        # TODO: add verifications
         peer_status = orjson.loads(audit_request.chain)
-        res = self.persistence.dump_peer_status(peer_id, peer_status)
-        if res:
-            # Create an audit proof for the this sequence
-            sign = default_eccrypto.create_signature(self.my_peer.key, audit_request.chain)
-            # create an audit proof
-            audit = {}
-            my_id = hexlify(self.my_peer.public_key.key_to_bin()).decode()
-            audit[my_id] = hexlify(sign).decode()
-            self.send_audit_proofs(source_address, audit_request.crawl_id, orjson.dumps(audit))
+        # Verify peer status
+        result = self.verify_peer_status(peer_id, peer_status)
+        if result.state == ValidationResult.invalid:
+            # Alert: Peer is provably hiding a transaction
+            self.logger.error("Peer is hiding transactions  %s", result.errors)
+            # TODO: send alert to other known peers
         else:
-            # This is invalid audit request, refusing to sign
-            self.logger.error("Received invalid audit request id %s", audit_request.crawl_id)
-
-    @synchronized
-    @lazy_wrapper(GlobalTimeDistributionPayload, PeerCrawlResponsePayload)
-    def received_peer_crawl_response(self, peer, dist, payload: PeerCrawlResponsePayload):
-
-        cache = self.request_cache.get(u"crawl", payload.crawl_id)
-        peer_id = self.persistence.int_to_id(payload.crawl_id)
-        prev_balance = self.persistence.get_balance(peer_id)
-        self.logger.info("Dump chain for %s, balance before is %s", peer_id, prev_balance)
-        status = orjson.loads(payload.chain)
-        res = self.persistence.dump_peer_status(peer_id, status)
-        after_balance = self.persistence.get_balance(peer_id)
-        self.logger.info("Dump chain for %s, balance after is %s", peer_id, after_balance)
-        if after_balance < 0:
-            self.logger.error("Balance if still negative!  %s", status)
-        else:
-            seq_num = status['seq_num']
-            self.persistence.add_peer_proofs(peer_id, seq_num, status, None)
-        if cache:
-            cache.received_empty_response()
-        else:
-            self.logger.error("Received peer crawl with unknown crawl id/Performing audit %s", payload.crawl_id)
-            # Might be an active audit request -> verify the status/send chain tests
-            self.perform_audit(peer.address, payload)
+            if self.persistence.dump_peer_status(peer_id, peer_status):
+                # Create an audit proof for the this sequence
+                sign = default_eccrypto.create_signature(self.my_peer.key, audit_request.chain)
+                # create an audit proof
+                audit = {}
+                my_id = hexlify(self.my_peer.public_key.key_to_bin()).decode()
+                audit[my_id] = hexlify(sign).decode()
+                self.send_audit_proofs(source_address, audit_request.crawl_id, orjson.dumps(audit))
+            else:
+                # This is invalid audit request, refusing to sign
+                self.logger.error("Received invalid audit request id %s", audit_request.crawl_id)
 
     @synchronized
     @lazy_wrapper(GlobalTimeDistributionPayload, PeerCrawlResponsePayload)
     def received_audit_request(self, peer, dist, payload: PeerCrawlResponsePayload):
-
-        cache = self.request_cache.get(u"crawl", payload.crawl_id)
-        peer_id = self.persistence.int_to_id(payload.crawl_id)
-        prev_balance = self.persistence.get_balance(peer_id)
-        self.logger.info("Dump chain for %s, balance before is %s", peer_id, prev_balance)
-        res = self.persistence.dump_peer_status(peer_id, orjson.loads(payload.chain))
-        after_balance = self.persistence.get_balance(peer_id)
-        self.logger.info("Dump chain for %s, balance after is %s", peer_id, after_balance)
-        if after_balance < 0:
-            self.logger.error("Balance if still negative!  %s", orjson.loads(payload.chain))
-
+        # TODO: Add DOS protection
         self.logger.info("Received audit request %s from %s:%d", payload.crawl_id, peer.address[0], peer.address[1])
         # Might be an active audit request -> verify the status/send chain tests
         self.perform_audit(peer.address, payload)
-
-    def get_all_communities_peers(self):
-        peers = set()
-        for mid in self.pex:
-            val = self.pex[mid].get_peers()
-            if val:
-                peers.update(val)
-        return peers
-
-    def send_peer_crawl_response(self, peer, crawl_id, chain):
-        """
-        Send chain to response for the peer crawl
-        """
-        self._logger.info("Sending peer crawl response to peer %s:%d", peer.address[0], peer.address[1])
-        global_time = self.claim_global_time()
-        auth = BinMemberAuthenticationPayload(self.my_peer.public_key.key_to_bin()).to_pack_list()
-        payload = PeerCrawlResponsePayload(crawl_id, chain).to_pack_list()
-        dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
-
-        packet = self._ez_pack(self._prefix, 9, [auth, dist, payload])
-        self.endpoint.send(peer.address, packet)
 
     def send_peer_audit_request(self, peer, crawl_id, chain):
         """
@@ -960,6 +908,77 @@ class TrustChainCommunity(Community):
         dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
 
         packet = self._ez_pack(self._prefix, 12, [auth, dist, payload])
+        self.endpoint.send(peer.address, packet)
+
+
+    def get_all_communities_peers(self):
+        peers = set()
+        for mid in self.pex:
+            val = self.pex[mid].get_peers()
+            if val:
+                peers.update(val)
+        return peers
+
+    def verify_peer_status(self, peer_id, status):
+        result = ValidationResult()
+        if "seq_num" not in status or 'spends' not in status or 'claims' not in status:
+            # Ignore peer status if it is old/ or ill formed
+            result.state = ValidationResult.no_info
+            return result
+
+        # 1. Verify that peer included all known spenders
+        all_verified = True
+        for p in self.persistence.get_all_spend_peers(peer_id):
+            balance, seq_num = self.persistence.get_total_pairwise_spends(peer_id, p)
+            if balance > 0 and seq_num <= status['seq_num']:
+                if p not in status['spends'] or status['spends'][p] < balance:
+                    # Alert, peer is hiding my transaction
+                    result.err("Peer is hiding spend with peer {}".format(p))
+            else:
+                all_verified = False
+        if result.state != ValidationResult.invalid and not all_verified:
+            result.state = ValidationResult.partial
+        # TODO: 2. Verify that there are no unknown holes
+        return result
+
+    @synchronized
+    @lazy_wrapper(GlobalTimeDistributionPayload, PeerCrawlResponsePayload)
+    def received_peer_crawl_response(self, peer, dist, payload: PeerCrawlResponsePayload):
+        cache = self.request_cache.get(u"crawl", payload.crawl_id)
+        if cache:
+            peer_id = self.persistence.int_to_id(payload.crawl_id)
+            prev_balance = self.persistence.get_balance(peer_id)
+            self.logger.info("Dump chain for %s, balance before is %s", peer_id, prev_balance)
+            status = orjson.loads(payload.chain)
+            result = self.verify_peer_status(peer_id, status)
+            if result == ValidationResult.invalid:
+                # Alert: Peer is provably hiding a transaction
+                self.logger.error("Peer is hiding transactions  %s", result.errors)
+                # TODO: send alert to other known peers
+                cache.received_empty_response()
+            else:
+                res = self.persistence.dump_peer_status(peer_id, status)
+                after_balance = self.persistence.get_balance(peer_id)
+                self.logger.info("Dump chain for %s, balance after is %s", peer_id, after_balance)
+                if after_balance < 0:
+                    self.logger.error("Balance if still negative!  %s", status)
+                else:
+                    seq_num = status['seq_num']
+                    self.persistence.add_peer_proofs(peer_id, seq_num, status, None)
+                if cache:
+                    cache.received_empty_response()
+
+    def send_peer_crawl_response(self, peer, crawl_id, chain):
+        """
+        Send chain to response for the peer crawl
+        """
+        self._logger.info("Sending peer crawl response to peer %s:%d", peer.address[0], peer.address[1])
+        global_time = self.claim_global_time()
+        auth = BinMemberAuthenticationPayload(self.my_peer.public_key.key_to_bin()).to_pack_list()
+        payload = PeerCrawlResponsePayload(crawl_id, chain).to_pack_list()
+        dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
+
+        packet = self._ez_pack(self._prefix, 9, [auth, dist, payload])
         self.endpoint.send(peer.address, packet)
 
     def form_peer_status_response(self, public_key):
@@ -1292,7 +1311,6 @@ class TrustChainCommunity(Community):
     @synchronized
     def introduction_request_callback(self, peer, dist, payload):
         self.form_subtrust_community(peer)
-
 
     @synchronized
     def introduction_response_callback(self, peer, dist, payload):
