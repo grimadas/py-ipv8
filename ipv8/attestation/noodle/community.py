@@ -47,15 +47,10 @@ def synchronized(f):
     return wrapper
 
 
-class TrustPeer(object):
-    def __init__(self, mid):
-        self.mid = mid
-
-
 class SubTrustCommunity(Community):
 
     def __init__(self, *args, **kwargs):
-        self.master_peer = TrustPeer(kwargs.pop('mid'))
+        self.master_peer = kwargs.pop('master_peer')
         self._prefix = b'\x00' + self.version + self.master_peer.mid
         super(SubTrustCommunity, self).__init__(*args, **kwargs)
 
@@ -1000,6 +995,7 @@ class NoodleCommunity(Community):
     @synchronized
     @lazy_wrapper(GlobalTimeDistributionPayload, MintRequestPayload)
     def received_mint_request(self, peer, dist, payload):
+        self._logger.info("Received mint request with value %d from peer %s", payload.mint_value, peer)
         self.mint(payload.mint_value)
         self.transfer(peer, payload.mint_value)
 
@@ -1371,7 +1367,7 @@ class NoodleCommunity(Community):
         if not self.ipv8:
             self.logger.warning('No IPv8 service object available, cannot start SubTrustCommunity')
         elif peer.public_key.key_to_bin() in known_minters and peer.mid not in self.pex:
-            community = SubTrustCommunity(self.my_peer, self.ipv8.endpoint, Network(), mid=peer.mid, max_peers=-1)
+            community = SubTrustCommunity(self.my_peer, self.ipv8.endpoint, Network(), master_peer=peer, max_peers=-1)
             self.ipv8.overlays.append(community)
             # Discover and connect to everyone for 50 seconds
             self.pex[peer.mid] = community
