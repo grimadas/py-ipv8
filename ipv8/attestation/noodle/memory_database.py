@@ -27,16 +27,6 @@ class NoodleMemoryDatabase(object):
         self.latest_blocks = {}
         self.logger = logging.getLogger(self.__class__.__name__)
 
-        self.original_db = None
-        if original_db:
-            self.original_db = original_db
-
-            # Fill the memory database with the blocks in the original database
-            blocks = original_db.get_all_blocks()
-            self.logger.info("Filling memory DB with %d blocks..." % len(blocks))
-            for block in blocks:
-                self.add_block(block)
-
         self.double_spends = {}
         self.peer_map = {}
 
@@ -53,6 +43,21 @@ class NoodleMemoryDatabase(object):
 
         self.block_time = {}
         self.block_file = None
+
+        self.original_db = None
+        if original_db:
+            self.original_db = original_db
+
+            # Fill the memory database with the blocks in the original database
+            blocks = original_db.get_all_blocks()
+            self.logger.info("Filling memory DB with %d blocks..." % len(blocks))
+            for block in blocks:
+                self.block_cache[(block.public_key, block.sequence_number)] = block
+                self.linked_block_cache[(block.link_public_key, block.link_sequence_number)] = block
+                if block.public_key not in self.latest_blocks:
+                    self.latest_blocks[block.public_key] = block
+                elif self.latest_blocks[block.public_key].sequence_number < block.sequence_number:
+                    self.latest_blocks[block.public_key] = block
 
     def key_to_id(self, key):
         return hexlify(key)[-KEY_LEN:].decode()
