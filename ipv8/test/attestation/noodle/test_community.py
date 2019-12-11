@@ -187,6 +187,29 @@ class TestNoodleCommunityThreeNodes(TestNoodleCommunityBase):
         self.assertFalse(latest_block)
 
 
+class TestNoodleCommunityFiveNodes(TestNoodleCommunityBase):
+    __testing__ = True
+    NUM_NODES = 5
+
+    @inlineCallbacks
+    def test_transfer_twice(self):
+        """
+        Test transferring some funds to different entities.
+        """
+        yield self.introduce_nodes()
+        yield self.nodes[0].overlay.mint()
+        yield self.nodes[0].overlay.transfer(self.nodes[1].overlay.my_peer, 10)
+
+        self.nodes[1].overlay.persistence.get_balance = lambda _, verified=True: 10000
+        yield self.nodes[1].overlay.transfer(self.nodes[2].overlay.my_peer, 10)
+        self.nodes[1].overlay.transfer(self.nodes[3].overlay.my_peer, 10)
+
+        # The block should not be counter-signed by node 3
+        my_pub_key = self.nodes[3].overlay.my_peer.public_key.key_to_bin()
+        latest_block = self.nodes[3].overlay.persistence.get_latest(my_pub_key)
+        self.assertFalse(latest_block)
+
+
 class TestNoodleCommunityTwoNodesAudits(TestNoodleCommunityBase):
     __testing__ = True
 
