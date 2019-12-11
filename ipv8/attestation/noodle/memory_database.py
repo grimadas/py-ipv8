@@ -17,14 +17,21 @@ class NoodleMemoryDatabase(object):
     This class defines an optimized memory database for Noodle.
     """
 
-    def __init__(self, working_directory, db_name):
+    def __init__(self, working_directory, db_name, original_db=None):
         self.working_directory = working_directory
         self.db_name = db_name
         self.block_cache = {}
         self.linked_block_cache = {}
         self.block_types = {}
         self.latest_blocks = {}
+
         self.original_db = None
+        if original_db:
+            self.original_db = original_db
+
+            # Fill the memory database with the blocks in the original database
+            for block in original_db.get_all_blocks():
+                self.add_block(block)
 
         self.double_spends = {}
         self.peer_map = {}

@@ -131,8 +131,7 @@ class NoodleCommunity(Community):
 
         # Enable the memory database
         orig_db = self.persistence
-        self.persistence = NoodleMemoryDatabase(working_directory, db_name)
-        self.persistence.original_db = orig_db
+        self.persistence = NoodleMemoryDatabase(working_directory, db_name, orig_db)
 
         # Add the system minter
         self.known_graph.add_node(self.minter_peer.public_key.key_to_bin(), minter=True)
