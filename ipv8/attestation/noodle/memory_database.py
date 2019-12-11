@@ -106,6 +106,9 @@ class NoodleMemoryDatabase(object):
             self.add_claim(block)
         self.block_time[(block.public_key, block.sequence_number)] = int(round(time.time() * 1000))
 
+        if self.original_db:
+            self.original_db.add_block(block)
+
     def add_spend(self, spend):
         pk = spend.public_key
         lpk = spend.link_public_key
@@ -405,19 +408,21 @@ class NoodleMemoryDatabase(object):
 
     def commit_block_times(self):
         self.write_work_graph()
-        with open(self.block_file, "a") as t_file:
-            writer = csv.DictWriter(t_file, ['time', 'transaction', 'type', "seq_num", "link", 'from_id', 'to_id'])
-            for block_id in self.block_time:
-                block = self.block_cache[block_id]
-                time = self.block_time[block_id]
-                from_id = hexlify(block.public_key).decode()[-8:]
-                to_id = hexlify(block.link_public_key).decode()[-8:]
-                writer.writerow({"time": time, 'transaction': str(block.transaction),
-                                 'type': block.type.decode(),
-                                 'seq_num': block.sequence_number, "link": block.link_sequence_number,
-                                 'from_id': from_id, 'to_id': to_id
-                                 })
-            self.block_time.clear()
+
+        if self.block_file:
+            with open(self.block_file, "a") as t_file:
+                writer = csv.DictWriter(t_file, ['time', 'transaction', 'type', "seq_num", "link", 'from_id', 'to_id'])
+                for block_id in self.block_time:
+                    block = self.block_cache[block_id]
+                    time = self.block_time[block_id]
+                    from_id = hexlify(block.public_key).decode()[-8:]
+                    to_id = hexlify(block.link_public_key).decode()[-8:]
+                    writer.writerow({"time": time, 'transaction': str(block.transaction),
+                                     'type': block.type.decode(),
+                                     'seq_num': block.sequence_number, "link": block.link_sequence_number,
+                                     'from_id': from_id, 'to_id': to_id
+                                     })
+                self.block_time.clear()
 
     def commit(self, my_pub_key):
         """
