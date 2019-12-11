@@ -16,12 +16,11 @@ from twisted.internet import reactor
 from twisted.internet.defer import Deferred, fail, inlineCallbacks, maybeDeferred, returnValue, succeed
 from twisted.internet.task import LoopingCall
 
-from ipv8.peerdiscovery.discovery import RandomWalk
-from ipv8.peerdiscovery.network import Network
 from .block import ANY_COUNTERPARTY_PK, EMPTY_PK, GENESIS_SEQ, NoodleBlock, UNKNOWN_SEQ, ValidationResult
 from .caches import ChainCrawlCache, CrawlRequestCache, HalfBlockSignCache, IntroCrawlTimeout
 from .database import NoodleDB
 from .exceptions import InsufficientBalanceException, NoPathFoundException
+from .listener import BlockListener
 from .memory_database import NoodleMemoryDatabase
 from .payload import *
 from .settings import NoodleSettings, SecurityMode
@@ -30,6 +29,8 @@ from ...keyvault.crypto import default_eccrypto
 from ...lazy_community import lazy_wrapper, lazy_wrapper_unsigned, lazy_wrapper_unsigned_wd
 from ...messaging.payload_headers import BinMemberAuthenticationPayload, GlobalTimeDistributionPayload
 from ...peer import Peer
+from ...peerdiscovery.discovery import RandomWalk
+from ...peerdiscovery.network import Network
 from ...requestcache import RandomNumberCache, RequestCache
 from ...util import addCallback
 
@@ -53,6 +54,19 @@ class SubTrustCommunity(Community):
         self.master_peer = kwargs.pop('master_peer')
         self._prefix = b'\x00' + self.version + self.master_peer.mid
         super(SubTrustCommunity, self).__init__(*args, **kwargs)
+
+
+class NoodleBlockListener(BlockListener):
+    """
+    This block listener simply signs all blocks it receives.
+    """
+    BLOCK_CLASS = NoodleBlock
+
+    def should_sign(self, block):
+        return True
+
+    def received_block(self, block):
+        pass
 
 
 class NoodleCommunity(Community):
@@ -111,6 +125,9 @@ class NoodleCommunity(Community):
             chr(12): self.received_audit_request,
             chr(13): self.received_mint_request
         })
+
+        # Add the listener
+        self.add_listener(NoodleBlockListener(), [b'spend', b'claim'])
 
         # Enable the memory database
         orig_db = self.persistence

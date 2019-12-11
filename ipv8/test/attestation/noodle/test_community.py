@@ -19,19 +19,6 @@ class DummyBlock(NoodleBlock):
     pass
 
 
-class TestBlockListener(BlockListener):
-    """
-    This block listener simply signs all blocks it receives.
-    """
-    BLOCK_CLASS = DummyBlock
-
-    def should_sign(self, block):
-        return True
-
-    def received_block(self, block):
-        pass
-
-
 class TestNoodleCommunityBase(TestBase):
     __testing__ = False
     NUM_NODES = 2
@@ -39,9 +26,6 @@ class TestNoodleCommunityBase(TestBase):
     def setUp(self):
         super(TestNoodleCommunityBase, self).setUp()
         self.initialize(NoodleCommunity, self.NUM_NODES)
-
-        for node in self.nodes:
-            node.overlay.add_listener(TestBlockListener(), [b'spend', b'claim'])
 
         # Make sure everyone knows the minter (first peer)
         for node_ind in range(1, len(self.nodes)):
