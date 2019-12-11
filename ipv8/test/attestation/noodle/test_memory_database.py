@@ -64,7 +64,7 @@ class TestMemDB(unittest.TestCase):
         if linked:
             self.assertTrue(self.db.get_balance(to_id) >= 0)
         else:
-            self.assertFalse(self.db.work_graph[to_id][from_id]['verified'])
+            self.assertTrue(self.db.work_graph[to_id][from_id]['verified'])
         return block
 
     def test_full_chain(self):
@@ -85,7 +85,7 @@ class TestMemDB(unittest.TestCase):
         self.db2.add_block(claim)
         pid_claim = self.db2.key_to_id(claim.public_key)
         lid_claim = self.db2.key_to_id(claim.link_public_key)
-        self.assertEqual(self.db2.get_balance(pid_claim), 0)
+        self.assertEqual(self.db2.get_balance(pid_claim), 2)
         self.assertGreater(self.db2.get_balance(pid_claim, False), 0)
         self.assertLess(self.db2.get_balance(lid_claim), 0)
 
@@ -104,5 +104,4 @@ class TestMemDB(unittest.TestCase):
         status = self.db2.get_peer_status(claim.link_public_key)
 
         self.db3.dump_peer_status(lid_claim, status)
-        c = self.db3.get_known_chains(pid_claim)
         self.assertEqual(self.db2.get_balance(pid_claim), self.db3.get_balance(pid_claim))
