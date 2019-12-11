@@ -1,5 +1,6 @@
 import csv
 import heapq
+import logging
 import os
 import time
 from binascii import hexlify
@@ -24,13 +25,16 @@ class NoodleMemoryDatabase(object):
         self.linked_block_cache = {}
         self.block_types = {}
         self.latest_blocks = {}
+        self.logger = logging.getLogger(self.__class__.__name__)
 
         self.original_db = None
         if original_db:
             self.original_db = original_db
 
             # Fill the memory database with the blocks in the original database
-            for block in original_db.get_all_blocks():
+            blocks = original_db.get_all_blocks()
+            self.logger.info("Filling memory DB with %d blocks..." % len(blocks))
+            for block in blocks:
                 self.add_block(block)
 
         self.double_spends = {}
