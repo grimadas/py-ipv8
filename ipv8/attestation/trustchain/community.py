@@ -786,7 +786,7 @@ class TrustChainCommunity(Community):
         seq_num = block.sequence_number
         seed = peer_key + bytes(seq_num)
         selected_peers = self.choose_community_peers(peer_list, seed, min(self.settings.com_size, len(peer_list)))
-        s1 = self.form_peer_status_response(peer_key)
+        s1 = self.form_peer_status_response(peer_key, selected_peers)
         # Send an audit request for the block + seq num
         # Now we send status + seq_num
         crawl_id = self.persistence.id_to_int(self.persistence.key_to_id(peer_key))
@@ -986,7 +986,19 @@ class TrustChainCommunity(Community):
         packet = self._ez_pack(self._prefix, 9, [auth, dist, payload])
         self.endpoint.send(peer.address, packet)
 
-    def form_peer_status_response(self, public_key):
+    def form_peer_status_response(self, public_key, exception_peer_list=None):
+        if self.settings.is_hiding:
+            status = self.persistence.get_peer_status(public_key)
+            # Hide the top spend excluding the peer that asked it
+            except_peers = set()
+            for peer in exception_peer_list:
+                peer_id = self.persistence.key_to_id(peer.public_key.key_to_bin())
+                except_peers.add(peer_id)
+            for p in sorted(((v, k) for k, v in status['spends'].items()), reverse=True):
+                if p[1] not in except_peers:
+                    status['spends'].pop(p[1])
+                    break
+            return orjson.dumps(status)
         return orjson.dumps(self.persistence.get_peer_status(public_key))
 
     @synchronized
@@ -1000,7 +1012,7 @@ class TrustChainCommunity(Community):
         if peer_id != my_id:
             self.logger.error("Peer requests not my peer status %s", peer_id)
         pack_except = set(orjson.loads(payload.pack_except))
-        s1 = self.form_peer_status_response(my_key)
+        s1 = self.form_peer_status_response(my_key, [peer])
         self.logger.info("Received peer crawl from node %s for range, sending status len %s",
                          hexlify(peer.public_key.key_to_bin())[-8:], len(s1))
         self.send_peer_crawl_response(peer, payload.crawl_id, s1)
