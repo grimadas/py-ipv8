@@ -1009,6 +1009,7 @@ class TrustChainCommunity(Community):
 
     def form_peer_status_response(self, public_key, exception_peer_list=None):
         if self.settings.is_hiding:
+            self.logger.warning("Finding something to hide in status response")
             status = self.persistence.get_peer_status(public_key)
             # Hide the top spend excluding the peer that asked it
             except_peers = set()
