@@ -295,7 +295,7 @@ class NoodleCommunity(Community):
         my_pk = self.my_peer.public_key.key_to_bin()
         my_id = self.persistence.key_to_id(my_pk)
 
-        if self.get_my_balance() < spend_value:
+        if self.get_my_balance() < spend_value and not self.settings.is_hiding:
             raise InsufficientBalanceException("Insufficient balance.")
         else:
             peer = self.get_hop_to_peer(pub_key)
@@ -876,7 +876,7 @@ class NoodleCommunity(Community):
         seq_num = block.sequence_number
         seed = peer_key + bytes(seq_num)
         selected_peers = self.choose_community_peers(peer_list, seed, min(self.settings.com_size, len(peer_list)))
-        s1 = self.form_peer_status_response(peer_key)
+        s1 = self.form_peer_status_response(peer_key, selected_peers)
         # Send an audit request for the block + seq num
         # Now we send status + seq_num
         crawl_id = self.persistence.id_to_int(self.persistence.key_to_id(peer_key))
@@ -1084,7 +1084,19 @@ class NoodleCommunity(Community):
         packet = self._ez_pack(self._prefix, 9, [auth, dist, payload])
         self.endpoint.send(peer.address, packet)
 
-    def form_peer_status_response(self, public_key):
+    def form_peer_status_response(self, public_key, exception_peer_list=None):
+        if self.settings.is_hiding:
+            status = self.persistence.get_peer_status(public_key)
+            # Hide the top spend excluding the peer that asked it
+            except_peers = set()
+            for peer in exception_peer_list:
+                peer_id = self.persistence.key_to_id(peer.public_key.key_to_bin())
+                except_peers.add(peer_id)
+            for p in sorted(((v, k) for k, v in status['spends'].items()), reverse=True):
+                if p[1] not in except_peers:
+                    status['spends'].pop(p[1])
+                    break
+            return json.dumps(status)
         return json.dumps(self.persistence.get_peer_status(public_key))
 
     @synchronized
@@ -1097,7 +1109,7 @@ class NoodleCommunity(Community):
         peer_id = self.persistence.int_to_id(payload.crawl_id)
         if peer_id != my_id:
             self.logger.error("Peer requests not my peer status %s", peer_id)
-        s1 = self.form_peer_status_response(my_key)
+        s1 = self.form_peer_status_response(my_key, [peer])
         self.logger.info("Received peer crawl from node %s for range, sending status len %s",
                          hexlify(peer.public_key.key_to_bin())[-8:], len(s1))
         self.send_peer_crawl_response(peer, payload.crawl_id, s1)

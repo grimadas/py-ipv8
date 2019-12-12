@@ -209,6 +209,27 @@ class TestNoodleCommunityFiveNodes(TestNoodleCommunityBase):
         latest_block = self.nodes[3].overlay.persistence.get_latest(my_pub_key)
         self.assertFalse(latest_block)
 
+    @inlineCallbacks
+    def test_double_spend_hiding(self):
+        """
+        Test transfer with hiding
+        """
+        self.nodes[1].overlay.settings.is_hiding = True
+        yield self.introduce_nodes()
+        yield self.nodes[0].overlay.mint()
+        yield self.nodes[0].overlay.transfer(self.nodes[1].overlay.my_peer, 10)
+        yield self.nodes[1].overlay.transfer(self.nodes[2].overlay.my_peer, 6)
+        yield self.nodes[1].overlay.transfer(self.nodes[0].overlay.my_peer, 6)
+
+        pk_1 = self.nodes[1].overlay.my_peer.public_key.key_to_bin()
+        id_1 = self.nodes[0].overlay.persistence.key_to_id(pk_1)
+        pk_2 = self.nodes[1].overlay.my_peer.public_key.key_to_bin()
+        id_2 = self.nodes[0].overlay.persistence.key_to_id(pk_2)
+        pk_3 = self.nodes[1].overlay.my_peer.public_key.key_to_bin()
+        id_3 = self.nodes[0].overlay.persistence.key_to_id(pk_3)
+
+        yield self.sleep(1.0)
+        self.assertLess(self.nodes[2].overlay.persistence.get_balance(id_2), 0)
 
 class TestNoodleCommunityTwoNodesAudits(TestNoodleCommunityBase):
     __testing__ = True
