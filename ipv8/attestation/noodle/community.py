@@ -660,6 +660,28 @@ class NoodleCommunity(Community):
             else:
                 reactor.callLater(0.5 * random.random(), self.send_block_pair, block1, block2, ttl=payload.ttl)
 
+    def check_local_state_wrt_block(self, block):
+        if block.type == b'spend':
+            # Verify the block
+            peer_id = self.persistence.key_to_id(block.public_key)
+            p = self.persistence.key_to_id(block.link_public_key)
+            seq_num = block.sequence_number
+            total_value = float(block.transaction["total_spend"])
+        elif block.type == b'claim':
+            peer_id = self.persistence.key_to_id(block.link_public_key)
+            p = self.persistence.key_to_id(block.public_key)
+            seq_num = block.link_sequence_number
+            total_value = float(block.transaction["total_spend"])
+        else:
+            # Ignore for now
+            return
+        # There is status from the peer that is higher than this block, and the relationship is not known
+        balance = self.persistence.get_total_pairwise_spends(peer_id, p)
+        known_seq_num = self.persistence.get_last_pairwise_spend_num(peer_id, p)
+        if self.persistence.get_peer_proofs(peer_id, seq_num) \
+                and (balance < total_value or known_seq_num < seq_num):
+            self.trigger_security_alert(peer_id, ["Hiding peer " + str(p)])
+
     def validate_persist_block(self, block, peer=None):
         """
         Validate a block and if it's valid, persist it. Return the validation result.
@@ -673,6 +695,8 @@ class NoodleCommunity(Community):
         else:
             self.notify_listeners(block)
             if not self.persistence.contains(block):
+                # verify the block according to the previously received status
+                self.check_local_state_wrt_block(block)
                 self.persistence.add_block(block)
                 if peer:
                     self.persistence.add_peer(peer)
@@ -978,6 +1002,9 @@ class NoodleCommunity(Community):
         else:
             if self.persistence.dump_peer_status(peer_id, peer_status):
                 # Create an audit proof for the this sequence
+                seq_num = peer_status['seq_num']
+                self.persistence.add_peer_proofs(peer_id, seq_num, peer_status, None)
+                # Create an audit proof for the this sequence
                 sign = default_eccrypto.create_signature(self.my_peer.key, audit_request.chain)
                 # create an audit proof
                 audit = {}
@@ -1064,15 +1091,14 @@ class NoodleCommunity(Community):
                 cache.received_empty_response()
             else:
                 res = self.persistence.dump_peer_status(peer_id, status)
+                seq_num = status['seq_num']
+                self.persistence.add_peer_proofs(peer_id, seq_num, status, None)
                 if not res:
                     self.logger.error("Status is ill-formed %s", status)
                 after_balance = self.persistence.get_balance(peer_id)
                 self.logger.info("Dump chain for %s, balance after is %s", peer_id, after_balance)
                 if after_balance < 0:
-                    self.logger.error("Balance is still negative!  %s", status)
-                else:
-                    seq_num = status['seq_num']
-                    self.persistence.add_peer_proofs(peer_id, seq_num, status, None)
+                    self.logger.error("Balance is still negative! %s", status)
                 cache.received_empty_response()
 
     def send_peer_crawl_response(self, peer, crawl_id, chain):
@@ -1096,10 +1122,14 @@ class NoodleCommunity(Community):
             for peer in exception_peer_list:
                 peer_id = self.persistence.key_to_id(peer.public_key.key_to_bin())
                 except_peers.add(peer_id)
+            hiding = False
             for p in sorted(((v, k) for k, v in status['spends'].items()), reverse=True):
                 if p[1] not in except_peers:
                     status['spends'].pop(p[1])
+                    hiding = True
                     break
+            if hiding:
+                self.logger.warning("Hiding info in status")
             return json.dumps(status)
         return json.dumps(self.persistence.get_peer_status(public_key))
 
