@@ -569,13 +569,13 @@ class TrustChainCommunity(Community):
     def check_local_state_wrt_block(self, block):
         if block.type == b'spend':
             # Verify the block
-            peer_id = self.persistence.key_to_id(block.public_key.key_to_bin())
-            p = self.persistence.key_to_id(block.link_public_key.key_to_bin())
+            peer_id = self.persistence.key_to_id(block.public_key)
+            p = self.persistence.key_to_id(block.link_public_key)
             seq_num = block.sequence_number
             total_value = float(block.transaction["total_spend"])
         if block.type == b'claim':
-            peer_id = self.persistence.key_to_id(block.link_public_key.key_to_bin())
-            p = self.persistence.key_to_id(block.public_key.key_to_bin())
+            peer_id = self.persistence.key_to_id(block.link_public_key)
+            p = self.persistence.key_to_id(block.public_key)
             seq_num = block.link_sequence_number
             total_value = float(block.transaction["total_spend"])
         # There is status from the peer that is higher than this block, and the relationship is not known
