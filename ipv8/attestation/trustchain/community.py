@@ -713,7 +713,7 @@ class TrustChainCommunity(Community):
 
         return default_eccrypto.is_valid_signature(pub_key, status, sign)
 
-    def triger_security_alert(self, peer_id, errors):
+    def trigger_security_alert(self, peer_id, errors):
         tx = {'errors': errors, 'peer': peer_id}
         self.self_sign_block(block_type=b'alert', transaction=tx)
 
@@ -748,7 +748,7 @@ class TrustChainCommunity(Community):
         if result == ValidationResult.invalid:
             # Alert: Peer is provably hiding a transaction
             self.logger.error("Peer is hiding transactions  %s", result.errors)
-            self.triger_security_alert(peer_id, result.errors)
+            self.trigger_security_alert(peer_id, result.errors)
             return False
         res = self.persistence.dump_peer_status(peer_id, status)
         self.persistence.add_peer_proofs(peer_id, status['seq_num'], status, pack_audit)
@@ -878,7 +878,7 @@ class TrustChainCommunity(Community):
         if result.state == ValidationResult.invalid:
             # Alert: Peer is provably hiding a transaction
             self.logger.error("Peer is hiding transactions  %s", result.errors)
-            self.triger_security_alert(peer_id, result.errors)
+            self.trigger_security_alert(peer_id, result.errors)
         else:
             if self.persistence.dump_peer_status(peer_id, peer_status):
                 # Create an audit proof for the this sequence
@@ -957,7 +957,7 @@ class TrustChainCommunity(Community):
             if result == ValidationResult.invalid:
                 # Alert: Peer is provably hiding a transaction
                 self.logger.error("Peer is hiding transactions  %s", result.errors)
-                self.triger_security_alert(peer_id, result.errors)
+                self.trigger_security_alert(peer_id, result.errors)
                 cache.received_empty_response()
             else:
                 res = self.persistence.dump_peer_status(peer_id, status)
