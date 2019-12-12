@@ -573,11 +573,14 @@ class TrustChainCommunity(Community):
             p = self.persistence.key_to_id(block.link_public_key)
             seq_num = block.sequence_number
             total_value = float(block.transaction["total_spend"])
-        if block.type == b'claim':
+        elif block.type == b'claim':
             peer_id = self.persistence.key_to_id(block.link_public_key)
             p = self.persistence.key_to_id(block.public_key)
             seq_num = block.link_sequence_number
             total_value = float(block.transaction["total_spend"])
+        else:
+            # Ignore for now
+            return
         # There is status from the peer that is higher than this block, and the relationship is not known
         balance = self.persistence.get_total_pairwise_spends(peer_id, p)
         known_seq_num = self.persistence.get_last_pairwise_spend_num(peer_id, p)
