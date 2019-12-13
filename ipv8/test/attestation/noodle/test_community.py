@@ -1,13 +1,14 @@
 from __future__ import absolute_import
 
-from twisted.internet.defer import inlineCallbacks
+import orjson as json
+from twisted.internet.defer import inlineCallbacks, Deferred
 
+from Tribler.pyipv8.ipv8.attestation.noodle.caches import NoodleCrawlRequestCache
 from ...base import TestBase
 from ...mocking.ipv8 import MockIPv8
 from ....attestation.noodle.block import NoodleBlock
 from ....attestation.noodle.community import NoodleCommunity
 from ....attestation.noodle.exceptions import InsufficientBalanceException, NoPathFoundException
-from ....attestation.noodle.listener import BlockListener
 from ....attestation.noodle.settings import NoodleSettings, SecurityMode
 
 
@@ -152,6 +153,30 @@ class TestNoodleCommunityTwoNodes(TestNoodleCommunityBase):
         my_id = self.nodes[0].overlay.persistence.key_to_id(my_pk)
         self.assertEqual(self.nodes[0].overlay.persistence.get_balance(my_id),
                          self.nodes[0].overlay.settings.initial_mint_value)
+
+    @inlineCallbacks
+    def test_big_status_response(self):
+
+        # Peer 1 is expecting status
+        crawl_deferred = Deferred()
+        self.nodes[1].overlay.request_cache.add(NoodleCrawlRequestCache(self.nodes[1].overlay, 1, crawl_deferred))
+        status = dict()
+        max_val = 500000
+        num_peers = 1000
+        status['spends'] = {}
+        status['claims'] = {}
+        status['seq_num'] = max_val
+        for i in range(num_peers):
+            status['spends'][8*str(i)] = (max_val, max_val)
+
+        status = json.dumps(status)
+        print("Size of the json %s", len(status))
+
+        yield self.nodes[0].overlay.send_peer_crawl_response(self.nodes[1].overlay.my_peer, 1, status)
+        yield self.sleep(0.3)
+
+        id = self.nodes[1].overlay.persistence.int_to_id(1)
+        self.assertEqual(self.nodes[1].overlay.persistence.get_balance(id), -max_val*num_peers)
 
 
 class TestNoodleCommunityThreeNodes(TestNoodleCommunityBase):

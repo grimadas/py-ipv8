@@ -46,7 +46,7 @@ class NoodleSettings(object):
         self.ignore_validation = False
 
         # Sync round time in seconds 
-        self.sync_time = 1
+        self.sync_time = 3
 
         # Security mode
         self.security_mode = SecurityMode.VANILLA
@@ -55,10 +55,10 @@ class NoodleSettings(object):
         self.com_size = 5
 
         # Tolerated inconsistency risk
-        self.risk = 0
+        self.risk = 0.9
 
         # Initial minting value
-        self.initial_mint_value = 100000
+        self.initial_mint_value = 100
 
         # Interval for making random transfers
-        self.transfer_interval = 30
+        self.transfer_interval = 10

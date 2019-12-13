@@ -1,4 +1,5 @@
 import unittest
+from binascii import unhexlify
 from collections import namedtuple
 from random import random
 
@@ -102,6 +103,9 @@ class TestMemDB(unittest.TestCase):
         # Test chain dumps
         self.db3 = NoodleMemoryDatabase('q1', 'a1')
         status = self.db2.get_peer_status(claim.link_public_key)
-
         self.db3.dump_peer_status(lid_claim, status)
+        status = self.db2.get_peer_status(claim.public_key)
+        self.db3.dump_peer_status(pid_claim, status)
+
+        self.assertEqual(self.db2.get_balance(lid_claim), self.db3.get_balance(lid_claim))
         self.assertEqual(self.db2.get_balance(pid_claim), self.db3.get_balance(pid_claim))

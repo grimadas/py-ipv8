@@ -597,7 +597,8 @@ class NoodleCommunity(Community):
             # Check if we are waiting for this signature response
             block_id_int = int(hexlify(block.block_id), 16) % 100000000
             if not self.request_cache.has(u'sign', block_id_int):
-                self.request_cache.add(HalfBlockSignCache(self, block, sign_deferred, peer.address,
+                self.request_cache.add(HalfBlockSignCache(self, block,
+                                                          sign_deferred, peer.address,
                                                           from_peer=from_peer, seq_num=from_peer_seq_num))
                 return sign_deferred
             return succeed((block, None))
@@ -749,6 +750,7 @@ class NoodleCommunity(Community):
                 else:
                     self.logger.error("Got conditional block without a proof %s ", cache.from_peer)
                     return fail(RuntimeError("Block could not be validated: %s, %s" % (validation[0], validation[1])))
+            return succeed(None)
 
         # Is this a request, addressed to us, and have we not signed it already?
         if (blk.link_sequence_number != UNKNOWN_SEQ
@@ -789,7 +791,7 @@ class NoodleCommunity(Community):
                     val = self.prepare_spend_transaction(pub_key, spend_value)
                     if not val:
                         # need to mint new values
-                        mint = self.prepare_mint_transaction()
+                        mint = self.prepare_mint_transaction(self.settings.initial_mint_value)
                         return addCallback(self.self_sign_block(block_type=b'claim', transaction=mint),
                                            lambda _: self.process_half_block(blk, peer))
                     next_peer, added = val
@@ -807,6 +809,9 @@ class NoodleCommunity(Community):
             return self.sign_block(peer, linked=blk, block_type=b'claim')
 
     def validate_claims(self, last_block, peer):
+        if peer.public_key.key_to_bin() != last_block.public_key:
+            return fail(RuntimeError("Peer and block are different"))
+
         from_peer = self.persistence.key_to_id(last_block.public_key)
         crawl_id = self.persistence.id_to_int(from_peer)
         if not self.request_cache.has(u"noodle-crawl", crawl_id):
@@ -1143,7 +1148,9 @@ class NoodleCommunity(Community):
         peer_id = self.persistence.int_to_id(payload.crawl_id)
         if peer_id != my_id:
             self.logger.error("Peer requests not my peer status %s", peer_id)
-        s1 = self.form_peer_status_response(my_key, [peer])
+            s1 = json.dumps({})
+        else:
+            s1 = self.form_peer_status_response(my_key, [peer])
         self.logger.info("Received peer crawl from node %s for range, sending status len %s",
                          hexlify(peer.public_key.key_to_bin())[-8:], len(s1))
         self.send_peer_crawl_response(peer, payload.crawl_id, s1)

@@ -130,6 +130,8 @@ class NoodleMemoryDatabase(object):
             self.work_graph.add_edge(id_from, id_to,
                                      total_spend=float(spend.transaction["total_spend"]),
                                      spend_num=spend.sequence_number)
+            # The balance was updated, changed, invalidate verified flag
+            self.work_graph[id_from][id_to]['verified'] = False
         elif 'spend_num' not in self.work_graph[id_from][id_to] or \
                 self.work_graph[id_from][id_to]["spend_num"] < spend.sequence_number:
             self.work_graph[id_from][id_to]["spend_num"] = spend.sequence_number
@@ -151,9 +153,7 @@ class NoodleMemoryDatabase(object):
         elif 'claim_num' not in self.work_graph[id_from][id_to] or \
                 self.work_graph[id_from][id_to]["claim_num"] < claim.sequence_number:
             self.work_graph[id_from][id_to]["claim_num"] = claim.sequence_number
-
-        if 'verified' not in self.work_graph[id_from][id_to]:
-            self.work_graph[id_from][id_to]['verified'] = True
+        self.work_graph[id_from][id_to]['verified'] = True
 
     def update_spend(self, spender, claimer, value, spender_seq_num):
         """
@@ -169,8 +169,9 @@ class NoodleMemoryDatabase(object):
         if value > val:
             self.work_graph.add_edge(spender, claimer,
                                      total_spend=value,
-                                     verified=True,
+                                     verified=False,
                                      spend_num=spender_seq_num)
+
 
     def update_claim(self, spender, claimer, value, claimer_seq_num):
         """
@@ -183,7 +184,9 @@ class NoodleMemoryDatabase(object):
                  True otherwise
         """
         val = self.get_total_pairwise_spends(spender, claimer)
-        if value > val:
+        if val == value:
+            self.work_graph[spender][claimer]['verified'] = True
+        elif value > val:
             self.work_graph.add_edge(spender, claimer,
                                      total_spend=value,
                                      verified=True,
