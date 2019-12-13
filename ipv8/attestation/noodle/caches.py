@@ -162,7 +162,7 @@ class NoodleCrawlRequestCache(NumberCache):
     """
     This request cache keeps track of outstanding noodle crawl requests.
     """
-    CRAWL_TIMEOUT = 2.0
+    CRAWL_TIMEOUT = 20.0
 
     def __init__(self, community, crawl_id, crawl_deferred, peer_id=None, total_blocks=None, **kwargs):
         super(NoodleCrawlRequestCache, self).__init__(community.request_cache, u"noodle-crawl", crawl_id)
