@@ -1,6 +1,6 @@
 from __future__ import absolute_import
 
-import ujson as json
+import orjson as json
 
 from twisted.trial import unittest
 

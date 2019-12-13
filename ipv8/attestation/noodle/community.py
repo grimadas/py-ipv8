@@ -11,7 +11,7 @@ from functools import wraps
 from threading import RLock
 
 import networkx as nx
-import ujson as json
+import orjson as json
 from twisted.internet import reactor
 from twisted.internet.defer import Deferred, fail, inlineCallbacks, maybeDeferred, returnValue, succeed
 from twisted.internet.task import LoopingCall
@@ -179,11 +179,11 @@ class NoodleCommunity(Community):
         """
         self._logger.info("Asking minters for funds (%d)", value)
         known_minters = set(nx.get_node_attributes(self.known_graph, 'minter').keys())
+        requests_sent = 0
         for minter in known_minters:
             minter_peer = self.get_peer(minter)
             if not minter_peer:
-                self._logger.info("No minters available!")
-                return
+                continue
 
             global_time = self.claim_global_time()
             auth = BinMemberAuthenticationPayload(self.my_peer.public_key.key_to_bin()).to_pack_list()
@@ -193,6 +193,10 @@ class NoodleCommunity(Community):
             packet = self._ez_pack(self._prefix, 13, [auth, dist, payload])
             self._logger.info("Sending mint request to peer %s:%d", *minter_peer.address)
             self.endpoint.send(minter_peer.address, packet)
+            requests_sent += 1
+
+        if requests_sent == 0:
+            self._logger.info("No minters available!")
 
     def get_my_balance(self):
         my_pk = self.my_peer.public_key.key_to_bin()
