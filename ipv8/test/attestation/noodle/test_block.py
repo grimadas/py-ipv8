@@ -784,11 +784,10 @@ class TestTrustChainBlock(unittest.TestCase):
         expected_keys = {'public_key', 'transaction', 'hash', 'timestamp', 'link_sequence_number', 'insert_time',
                          'previous_hash', 'sequence_number', 'signature', 'link_public_key', 'type',
                          'transaction_validation_result'}
-
         # Check if we have the required keys
-        self.assertSetEqual(set(block_keys), expected_keys)
+        self.assertSetEqual(set(block_keys) - {'link_key'}, expected_keys)
         # Check for duplicates
-        self.assertEqual(len(block_keys), len(expected_keys))
+        self.assertEqual(len(block_keys) - 1, len(expected_keys))
         self.assertEqual(dict(block)['transaction']['id'], 42)
 
     def test_hash_function(self):
