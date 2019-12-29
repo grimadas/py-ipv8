@@ -1,5 +1,4 @@
 import csv
-import heapq
 import logging
 import os
 import time
@@ -9,7 +8,7 @@ from hashlib import sha1
 import networkx as nx
 from six.moves import xrange
 
-from .block import NoodleBlock, EMPTY_PK
+from .block import NoodleBlock
 
 KEY_LEN = 8
 
@@ -30,6 +29,7 @@ class NoodleMemoryDatabase(object):
 
         self.double_spends = {}
         self.peer_map = {}
+        self.do_commit = True
 
         self.graph_path = os.path.join(self.working_directory, "work_graph.pickle")
         if os.path.exists(self.graph_path):
@@ -115,7 +115,7 @@ class NoodleMemoryDatabase(object):
             self.add_claim(block)
         self.block_time[(block.public_key, block.sequence_number)] = int(round(time.time() * 1000))
 
-        if self.original_db:
+        if self.original_db and self.do_commit:
             self.original_db.add_block(block)
 
     def add_spend(self, spend):
