@@ -893,14 +893,19 @@ class NoodleCommunity(Community):
     def trustchain_active_sync(self, community_mid):
         # choose the peers
         self.logger.info("Active Sync asking in the community %s", hexlify(community_mid).decode())
-        # Get the peer list for the community
-        peer_list = self.pex[community_mid].get_peers()
+
         # Get own last block in the community
         peer_key = self.my_peer.public_key.key_to_bin()
         block = self.persistence.get_latest(peer_key)
         if not block:
             self.logger.info("Peer has no block for audit. Skipping audit for now.")
             return
+
+        # Get the peer list for the community
+        peer_list = self.pex[community_mid].get_peers()
+
+        # Exclude crawlers - don't ask them for audits
+        peer_list = [peer for peer in peer_list if hexlify(peer.public_key.key_to_bin()) not in self.settings.crawlers]
 
         seq_num = block.sequence_number
         seed = peer_key + bytes(seq_num)
@@ -1492,10 +1497,10 @@ class NoodleCommunity(Community):
 
     def form_subtrust_community(self, peer):
         known_minters = set(nx.get_node_attributes(self.known_graph, 'minter').keys())
-        if not self.ipv8:
-            self.logger.warning('No IPv8 service object available, cannot start SubTrustCommunity')
         if hexlify(self.my_peer.public_key.key_to_bin()) in self.settings.crawlers:
             self.logger.warning("I am a crawler - not forming subtrust community")
+        elif not self.ipv8:
+            self.logger.warning('No IPv8 service object available, cannot start SubTrustCommunity')
         elif (peer.public_key.key_to_bin() in known_minters or not self.settings.minters) and peer.mid not in self.pex:
             self.logger.info("Creating SubTrustCommunity around peer %s", peer)
             community = SubTrustCommunity(self.my_peer, self.ipv8.endpoint, Network(),
