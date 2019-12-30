@@ -215,6 +215,7 @@ class NoodleCommunity(Community):
 
         if not self.get_peers():
             self._logger.info("No peers to make a payment to.")
+            return
 
         rand_peer = random.choice(self.get_peers())
 
