@@ -49,7 +49,7 @@ class NoodleSettings(object):
         self.sync_time = 1
 
         # Security mode
-        self.security_mode = SecurityMode.VANILLA
+        self.security_mode = SecurityMode.AUDIT
 
         # Security epsilon
         self.com_size = 2
