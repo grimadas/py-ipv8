@@ -1489,12 +1489,13 @@ class NoodleCommunity(Community):
         known_minters = set(nx.get_node_attributes(self.known_graph, 'minter').keys())
         if not self.ipv8:
             self.logger.warning('No IPv8 service object available, cannot start SubTrustCommunity')
-        elif peer.public_key.key_to_bin() in known_minters and peer.mid not in self.pex:
-            community = SubTrustCommunity(self.my_peer, self.ipv8.endpoint, Network(), master_peer=peer, max_peers=-1)
+        elif (peer.public_key.key_to_bin() in known_minters or not self.settings.minters) and peer.mid not in self.pex:
+            self.logger.info("Creating SubTrustCommunity around peer %s", peer)
+            community = SubTrustCommunity(self.my_peer, self.ipv8.endpoint, Network(),
+                                          master_peer=peer, max_peers=self.settings.max_peers_subtrust)
             self.ipv8.overlays.append(community)
-            # Discover and connect to everyone for 50 seconds
             self.pex[peer.mid] = community
-            # index = len(self.ipv8.overlays)
+
             if self.bootstrap_master:
                 self.logger.info('Proceed with a bootstrap master')
                 for k in self.bootstrap_master:
