@@ -69,3 +69,6 @@ class NoodleSettings(object):
         # Cache timeouts (in seconds)
         self.audit_request_timeout = 20.0
         self.audit_proof_request_timeout = 20.0
+
+        # Maximum number of peers in each SubTrust community
+        self.max_peers_subtrust = 30

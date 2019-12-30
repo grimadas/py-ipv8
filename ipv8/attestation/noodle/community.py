@@ -1500,7 +1500,7 @@ class NoodleCommunity(Community):
                 for k in self.bootstrap_master:
                     community.walk_to(k)
             else:
-                self.ipv8.strategies.append((RandomWalk(community), -1))
+                self.ipv8.strategies.append((RandomWalk(community), self.settings.max_peers_subtrust))
             self.build_security_community(peer.mid)
 
     def unload(self):
