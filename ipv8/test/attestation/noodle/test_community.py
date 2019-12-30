@@ -55,6 +55,7 @@ class TestNoodleCommunityTwoNodes(TestNoodleCommunityBase):
         def on_failure(exc):
             self.assertEqual(exc.type, InsufficientBalanceException)
 
+        self.nodes[0].overlay.persistence.get_balance = lambda _, verified=True: 0
         return self.nodes[0].overlay.transfer(self.nodes[1].overlay.my_peer, 100).addCallbacks(on_success, on_failure)
 
     def test_transfer_no_path(self):
@@ -72,12 +73,13 @@ class TestNoodleCommunityTwoNodes(TestNoodleCommunityBase):
         return self.nodes[0].overlay.transfer(self.nodes[1].overlay.my_peer, 100).addCallbacks(on_success, on_failure)
 
     @inlineCallbacks
-    def test_transfer(self):
+    def test_transfer_full_risk(self):
         """
-        Test a successful transfer.
+        Test a successful transfer with audits and full risk.
         """
+        self.nodes[1].overlay.settings.risk = 1
+
         yield self.introduce_nodes()
-        yield self.nodes[0].overlay.mint()
         yield self.nodes[0].overlay.transfer(self.nodes[1].overlay.my_peer, 10)
 
         my_pk = self.nodes[0].overlay.my_peer.public_key.key_to_bin()
@@ -87,25 +89,47 @@ class TestNoodleCommunityTwoNodes(TestNoodleCommunityBase):
 
         my_pk = self.nodes[1].overlay.my_peer.public_key.key_to_bin()
         my_id = self.nodes[1].overlay.persistence.key_to_id(my_pk)
-        self.assertEqual(self.nodes[1].overlay.persistence.get_balance(my_id), 10)
+        self.assertEqual(self.nodes[1].overlay.persistence.get_balance(my_id),
+                         self.nodes[1].overlay.settings.initial_mint_value + 10)
 
     @inlineCallbacks
-    def test_request_mint_value(self):
+    def test_transfer_no_risk(self):
         """
-        Test asking a minter for value.
+        Test a successful transfer with audits and no risk.
         """
         yield self.introduce_nodes()
-        self.nodes[1].overlay.ask_minters_for_funds()
-        yield self.sleep(0.2)
+        yield self.nodes[0].overlay.transfer(self.nodes[1].overlay.my_peer, 10)
+
+        my_pk = self.nodes[0].overlay.my_peer.public_key.key_to_bin()
+        my_id = self.nodes[0].overlay.persistence.key_to_id(my_pk)
+        self.assertEqual(self.nodes[0].overlay.persistence.get_balance(my_id),
+                         self.nodes[0].overlay.settings.initial_mint_value - 10)
 
         my_pk = self.nodes[1].overlay.my_peer.public_key.key_to_bin()
         my_id = self.nodes[1].overlay.persistence.key_to_id(my_pk)
-        self.assertEqual(self.nodes[1].overlay.persistence.get_balance(my_id), 10000)
+        self.assertEqual(self.nodes[1].overlay.persistence.get_balance(my_id),
+                         self.nodes[1].overlay.settings.initial_mint_value + 10)
 
-        # The minter should end up with a balance of 0
+    @inlineCallbacks
+    def test_transfer_no_risk_multiple(self):
+        """
+        Test multiple transfers in quick succession with audits and no risk.
+        """
+        yield self.introduce_nodes()
+        for _ in range(5):
+            self.nodes[0].overlay.transfer(self.nodes[1].overlay.my_peer, 10)
+
+        yield self.sleep(1)
+
         my_pk = self.nodes[0].overlay.my_peer.public_key.key_to_bin()
         my_id = self.nodes[0].overlay.persistence.key_to_id(my_pk)
-        self.assertEqual(self.nodes[0].overlay.persistence.get_balance(my_id), 0)
+        self.assertEqual(self.nodes[0].overlay.persistence.get_balance(my_id),
+                         self.nodes[0].overlay.settings.initial_mint_value - 50)
+
+        my_pk = self.nodes[1].overlay.my_peer.public_key.key_to_bin()
+        my_id = self.nodes[1].overlay.persistence.key_to_id(my_pk)
+        self.assertEqual(self.nodes[1].overlay.persistence.get_balance(my_id),
+                         self.nodes[1].overlay.settings.initial_mint_value + 50)
 
     @inlineCallbacks
     def test_make_random_transfer(self):
@@ -113,14 +137,13 @@ class TestNoodleCommunityTwoNodes(TestNoodleCommunityBase):
         Test making a random transfer.
         """
         yield self.introduce_nodes()
-        self.nodes[1].overlay.make_random_transfer()  # Should request for mint
-        yield self.sleep(0.2)
         self.nodes[1].overlay.make_random_transfer()  # Should make the payment now
         yield self.sleep(0.2)
 
         my_pk = self.nodes[1].overlay.my_peer.public_key.key_to_bin()
         my_id = self.nodes[1].overlay.persistence.key_to_id(my_pk)
-        self.assertEqual(self.nodes[1].overlay.persistence.get_balance(my_id), 9999)
+        self.assertEqual(self.nodes[1].overlay.persistence.get_balance(my_id),
+                         self.nodes[1].overlay.settings.initial_mint_value - 1)
 
     @inlineCallbacks
     def test_transfer_overspend(self):
@@ -128,14 +151,14 @@ class TestNoodleCommunityTwoNodes(TestNoodleCommunityBase):
         Test an overspend transaction.
         """
         yield self.introduce_nodes()
-        self.nodes[0].overlay.persistence.get_balance = lambda _, verified=True: 10000
-        self.nodes[0].overlay.transfer(self.nodes[1].overlay.my_peer, 10)
-        yield self.sleep(0.3)
+        self.nodes[0].overlay.persistence.get_balance = lambda _, verified=True: self.nodes[0].overlay.settings.initial_mint_value + 1
+        self.nodes[0].overlay.transfer(self.nodes[1].overlay.my_peer, self.nodes[0].overlay.settings.initial_mint_value + 1)
+        yield self.sleep(0.5)
 
         # The block should not be counter-signed
         my_pub_key = self.nodes[1].overlay.my_peer.public_key.key_to_bin()
-        latest_block = self.nodes[1].overlay.persistence.get_latest(my_pub_key)
-        self.assertFalse(latest_block)
+        latest_blocks = self.nodes[1].overlay.persistence.get_latest_blocks(my_pub_key)
+        self.assertEqual(len(latest_blocks), 1)
 
     @inlineCallbacks
     def test_mint(self):
@@ -151,7 +174,7 @@ class TestNoodleCommunityTwoNodes(TestNoodleCommunityBase):
         my_pk = self.nodes[0].overlay.my_peer.public_key.key_to_bin()
         my_id = self.nodes[0].overlay.persistence.key_to_id(my_pk)
         self.assertEqual(self.nodes[0].overlay.persistence.get_balance(my_id),
-                         self.nodes[0].overlay.settings.initial_mint_value)
+                         self.nodes[0].overlay.settings.initial_mint_value * 2)
 
 
 class TestNoodleCommunityThreeNodes(TestNoodleCommunityBase):
@@ -164,9 +187,24 @@ class TestNoodleCommunityThreeNodes(TestNoodleCommunityBase):
         Test transferring funds from minter to A and then from A to B.
         """
         yield self.introduce_nodes()
-        yield self.nodes[0].overlay.mint()
         yield self.nodes[0].overlay.transfer(self.nodes[1].overlay.my_peer, 10)
         yield self.nodes[1].overlay.transfer(self.nodes[2].overlay.my_peer, 10)
+
+        # Check balances
+        my_pk = self.nodes[0].overlay.my_peer.public_key.key_to_bin()
+        my_id = self.nodes[0].overlay.persistence.key_to_id(my_pk)
+        self.assertEqual(self.nodes[0].overlay.persistence.get_balance(my_id),
+                         self.nodes[0].overlay.settings.initial_mint_value - 10)
+
+        my_pk = self.nodes[1].overlay.my_peer.public_key.key_to_bin()
+        my_id = self.nodes[1].overlay.persistence.key_to_id(my_pk)
+        self.assertEqual(self.nodes[1].overlay.persistence.get_balance(my_id),
+                         self.nodes[1].overlay.settings.initial_mint_value)
+
+        my_pk = self.nodes[2].overlay.my_peer.public_key.key_to_bin()
+        my_id = self.nodes[2].overlay.persistence.key_to_id(my_pk)
+        self.assertEqual(self.nodes[2].overlay.persistence.get_balance(my_id),
+                         self.nodes[2].overlay.settings.initial_mint_value + 10)
 
     @inlineCallbacks
     def test_transfer_chain_overspend(self):
@@ -174,17 +212,16 @@ class TestNoodleCommunityThreeNodes(TestNoodleCommunityBase):
         Test transferring funds from minter to A and then from A to B. The final transfer will be an overspend.
         """
         yield self.introduce_nodes()
-        yield self.nodes[0].overlay.mint()
-        yield self.nodes[0].overlay.transfer(self.nodes[1].overlay.my_peer, 10)
-        self.nodes[1].overlay.persistence.get_balance = lambda _, verified=True: 10000
-        self.nodes[1].overlay.transfer(self.nodes[2].overlay.my_peer, 11)
+        yield self.nodes[0].overlay.transfer(self.nodes[1].overlay.my_peer, 1)
+        self.nodes[1].overlay.persistence.get_balance = lambda _, verified=True: self.nodes[1].overlay.settings.initial_mint_value + 2
+        self.nodes[1].overlay.transfer(self.nodes[2].overlay.my_peer, self.nodes[1].overlay.settings.initial_mint_value + 2)
 
         yield self.sleep(0.3)
 
         # The block should not be counter-signed
         my_pub_key = self.nodes[2].overlay.my_peer.public_key.key_to_bin()
-        latest_block = self.nodes[2].overlay.persistence.get_latest(my_pub_key)
-        self.assertFalse(latest_block)
+        latest_blocks = self.nodes[2].overlay.persistence.get_latest_blocks(my_pub_key)
+        self.assertEqual(len(latest_blocks), 1)
 
 
 class TestNoodleCommunityFiveNodes(TestNoodleCommunityBase):
@@ -196,111 +233,33 @@ class TestNoodleCommunityFiveNodes(TestNoodleCommunityBase):
         """
         Test transferring some funds to different entities.
         """
+        initial_value = self.nodes[0].overlay.settings.initial_mint_value
         yield self.introduce_nodes()
-        yield self.nodes[0].overlay.mint()
-        yield self.nodes[0].overlay.transfer(self.nodes[1].overlay.my_peer, 10)
+        yield self.nodes[0].overlay.transfer(self.nodes[1].overlay.my_peer,
+                                             self.nodes[0].overlay.settings.initial_mint_value)
 
-        self.nodes[1].overlay.persistence.get_balance = lambda _, verified=True: 10000
-        yield self.nodes[1].overlay.transfer(self.nodes[2].overlay.my_peer, 9)
-        self.nodes[1].overlay.transfer(self.nodes[3].overlay.my_peer, 8)
+        self.nodes[1].overlay.persistence.get_balance = lambda _, verified=True: initial_value * 3
+        yield self.nodes[1].overlay.transfer(self.nodes[2].overlay.my_peer, initial_value * 2)
+        self.nodes[1].overlay.transfer(self.nodes[3].overlay.my_peer, initial_value)
 
         # The block should not be counter-signed by node 3
         my_pub_key = self.nodes[3].overlay.my_peer.public_key.key_to_bin()
-        latest_block = self.nodes[3].overlay.persistence.get_latest(my_pub_key)
-        self.assertFalse(latest_block)
+        latest_blocks = self.nodes[3].overlay.persistence.get_latest_blocks(my_pub_key)
+        self.assertEqual(len(latest_blocks), 1)
 
-    @inlineCallbacks
-    def test_double_spend_hiding(self):
-        """
-        Test transfer with hiding
-        """
-        self.nodes[1].overlay.settings.is_hiding = True
-        yield self.introduce_nodes()
-        yield self.nodes[0].overlay.mint()
-        yield self.nodes[0].overlay.transfer(self.nodes[1].overlay.my_peer, 10)
-        yield self.nodes[1].overlay.transfer(self.nodes[2].overlay.my_peer, 6)
-        yield self.nodes[1].overlay.transfer(self.nodes[0].overlay.my_peer, 6)
-
-        pk_1 = self.nodes[1].overlay.my_peer.public_key.key_to_bin()
-        id_1 = self.nodes[0].overlay.persistence.key_to_id(pk_1)
-        pk_2 = self.nodes[1].overlay.my_peer.public_key.key_to_bin()
-        id_2 = self.nodes[0].overlay.persistence.key_to_id(pk_2)
-        pk_3 = self.nodes[1].overlay.my_peer.public_key.key_to_bin()
-        id_3 = self.nodes[0].overlay.persistence.key_to_id(pk_3)
-
-        yield self.sleep(1.0)
-        self.assertLess(self.nodes[2].overlay.persistence.get_balance(id_2), 0)
-
-
-class TestNoodleCommunityTwoNodesAudits(TestNoodleCommunityBase):
-    __testing__ = True
-
-    def create_node(self):
-        settings = NoodleSettings()
-        settings.security_mode = SecurityMode.AUDIT
-        ipv8 = MockIPv8(u"curve25519", NoodleCommunity, working_directory=u":memory:", settings=settings)
-        ipv8.overlay.ipv8 = ipv8
-
-        return ipv8
-
-    @inlineCallbacks
-    def test_transfer_full_risk(self):
-        """
-        Test a successful transfer with audits and full risk.
-        """
-        self.nodes[1].overlay.settings.risk = 1
-
-        yield self.introduce_nodes()
-        yield self.nodes[0].overlay.mint()
-        yield self.sleep(0.1)  # To allow the receivers of the mint block to update their caches
-        yield self.nodes[0].overlay.transfer(self.nodes[1].overlay.my_peer, 10)
-
-        my_pk = self.nodes[0].overlay.my_peer.public_key.key_to_bin()
-        my_id = self.nodes[0].overlay.persistence.key_to_id(my_pk)
-        self.assertEqual(self.nodes[0].overlay.persistence.get_balance(my_id),
-                         self.nodes[0].overlay.settings.initial_mint_value - 10)
-
-        my_pk = self.nodes[1].overlay.my_peer.public_key.key_to_bin()
-        my_id = self.nodes[1].overlay.persistence.key_to_id(my_pk)
-        self.assertEqual(self.nodes[1].overlay.persistence.get_balance(my_id), 10)
-
-    @inlineCallbacks
-    def test_transfer_no_risk(self):
-        """
-        Test a successful transfer with audits and no risk.
-        """
-        yield self.introduce_nodes()
-        yield self.nodes[0].overlay.mint()
-        yield self.sleep(0.1)  # To allow the receivers of the mint block to update their caches
-        yield self.nodes[0].overlay.transfer(self.nodes[1].overlay.my_peer, 10)
-
-        my_pk = self.nodes[0].overlay.my_peer.public_key.key_to_bin()
-        my_id = self.nodes[0].overlay.persistence.key_to_id(my_pk)
-        self.assertEqual(self.nodes[0].overlay.persistence.get_balance(my_id),
-                         self.nodes[0].overlay.settings.initial_mint_value - 10)
-
-        my_pk = self.nodes[1].overlay.my_peer.public_key.key_to_bin()
-        my_id = self.nodes[1].overlay.persistence.key_to_id(my_pk)
-        self.assertEqual(self.nodes[1].overlay.persistence.get_balance(my_id), 10)
-
-    @inlineCallbacks
-    def test_transfer_no_risk_multiple(self):
-        """
-        Test multiple transfers in quick succession with audits and no risk.
-        """
-        yield self.introduce_nodes()
-        yield self.nodes[0].overlay.mint()
-        yield self.sleep(0.1)  # To allow the receivers of the mint block to update their caches
-        for _ in range(5):
-            self.nodes[0].overlay.transfer(self.nodes[1].overlay.my_peer, 10)
-
-        yield self.sleep(1)
-
-        my_pk = self.nodes[0].overlay.my_peer.public_key.key_to_bin()
-        my_id = self.nodes[0].overlay.persistence.key_to_id(my_pk)
-        self.assertEqual(self.nodes[0].overlay.persistence.get_balance(my_id),
-                         self.nodes[0].overlay.settings.initial_mint_value - 50)
-
-        my_pk = self.nodes[1].overlay.my_peer.public_key.key_to_bin()
-        my_id = self.nodes[1].overlay.persistence.key_to_id(my_pk)
-        self.assertEqual(self.nodes[1].overlay.persistence.get_balance(my_id), 50)
+    # @inlineCallbacks
+    # def test_double_spend_hiding(self):
+    #     """
+    #     Test transfer with hiding
+    #     """
+    #     self.nodes[1].overlay.settings.is_hiding = True
+    #     yield self.introduce_nodes()
+    #     yield self.nodes[0].overlay.transfer(self.nodes[1].overlay.my_peer, 10)
+    #     yield self.nodes[1].overlay.transfer(self.nodes[2].overlay.my_peer, 6)
+    #     yield self.nodes[1].overlay.transfer(self.nodes[0].overlay.my_peer, 6)
+    #
+    #     pk_2 = self.nodes[1].overlay.my_peer.public_key.key_to_bin()
+    #     id_2 = self.nodes[0].overlay.persistence.key_to_id(pk_2)
+    #
+    #     yield self.sleep(1.0)
+    #     self.assertLess(self.nodes[2].overlay.persistence.get_balance(id_2), 0)

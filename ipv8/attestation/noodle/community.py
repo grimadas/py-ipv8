@@ -139,7 +139,7 @@ class NoodleCommunity(Community):
             self.known_graph.add_node(unhexlify(minter_pk), minter=True)
 
         # If we are the system minter, init the community
-        if hexlify(self.my_peer.public_key.key_to_bin()) in self.settings.minters:
+        if hexlify(self.my_peer.public_key.key_to_bin()) in self.settings.minters or not self.settings.minters:
             self._logger.info("I am the system minter - init our own community")
             self.init_minter_community()
 
@@ -887,7 +887,7 @@ class NoodleCommunity(Community):
 
     def trustchain_active_sync(self, community_mid):
         # choose the peers
-        self.logger.info("Active Sync asking in the community %s", community_mid)
+        self.logger.info("Active Sync asking in the community %s", hexlify(community_mid).decode())
         # Get the peer list for the community
         peer_list = self.pex[community_mid].get_peers()
         # Get own last block in the community
