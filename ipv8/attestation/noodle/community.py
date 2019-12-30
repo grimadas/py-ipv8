@@ -108,7 +108,7 @@ class NoodleCommunity(Community):
 
         self.pex = {}
         self.bootstrap_master = None
-        self.audit_requests = {}
+        self.proof_requests = {}
 
         self.decode_map.update({
             chr(1): self.received_half_block,
@@ -865,6 +865,10 @@ class NoodleCommunity(Community):
         return res
 
     def finalize_audits(self, audit_seq, status, audits):
+        if not audits:
+            self.logger.info("We did not receive any audit proof from others - not finalizing this audit!")
+            return
+
         self.logger.info("Audit with sequence number %d finalized (audits: %d)", audit_seq, len(audits))
         full_audit = dict(audits)
         proofs = json.dumps(full_audit)
@@ -873,13 +877,13 @@ class NoodleCommunity(Community):
         self.persistence.add_peer_proofs(my_id, audit_seq, status, proofs)
         # Get peers requested
         processed_ids = set()
-        for seq, peers_val in list(self.audit_requests.items()):
+        for seq, peers_val in list(self.proof_requests.items()):
             if seq <= audit_seq:
                 for p, audit_id in peers_val:
                     if (p, audit_id) not in processed_ids:
                         self.respond_with_audit_proof(p, audit_id, proofs, status)
                         processed_ids.add((p, audit_id))
-                del self.audit_requests[seq]
+                del self.proof_requests[seq]
 
     def trustchain_active_sync(self, community_mid):
         # choose the peers
@@ -959,9 +963,9 @@ class NoodleCommunity(Community):
             # Remember the request and answer later, when we received enough proofs.
             self._logger.info("Adding audit proof request from %s:%d (id: %d) to cache",
                               source_address[0], source_address[1], payload.crawl_id)
-            if payload.seq_num not in self.audit_requests:
-                self.audit_requests[payload.seq_num] = []
-            self.audit_requests[payload.seq_num].append((source_address, payload.crawl_id))
+            if payload.seq_num not in self.proof_requests:
+                self.proof_requests[payload.seq_num] = []
+            self.proof_requests[payload.seq_num].append((source_address, payload.crawl_id))
 
     def respond_with_audit_proof(self, address, audit_id, proofs, status):
         """
