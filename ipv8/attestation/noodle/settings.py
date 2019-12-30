@@ -61,7 +61,7 @@ class NoodleSettings(object):
         self.initial_mint_value = 100000
 
         # Interval for making random transfers
-        self.transfer_interval = 30
+        self.transfer_interval = 1
 
         # Minter identities that we accept (if this is an empty set, everyone is an minter)
         self.minters = []
