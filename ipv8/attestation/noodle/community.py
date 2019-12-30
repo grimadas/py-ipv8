@@ -205,6 +205,10 @@ class NoodleCommunity(Community):
         my_id = self.persistence.key_to_id(my_pk)
         return self.persistence.get_balance(my_id)
 
+    def get_eligible_payment_peers(self):
+        peers = self.get_peers()
+        return [peer for peer in peers if hexlify(peer.public_key.key_to_bin()) not in self.settings.crawlers]
+
     def make_random_transfer(self):
         """
         Transfer funds to a random peer.
@@ -213,7 +217,7 @@ class NoodleCommunity(Community):
             self.mint()
             return
 
-        if not self.get_peers():
+        if not self.get_eligible_payment_peers():
             self._logger.info("No peers to make a payment to.")
             return
 
@@ -1457,7 +1461,7 @@ class NoodleCommunity(Community):
                                                        self.defered_sync_start, community_mid))
 
     def init_minter_community(self):
-        if self.my_peer.mid not in self.pex:
+        if self.my_peer.mid not in self.pex and hexlify(self.my_peer.public_key.key_to_bin()) not in self.settings.crawlers:
             self.logger.info('Creating own minter community')
             self.pex[self.my_peer.mid] = self
             self.build_security_community(self.my_peer.mid)
@@ -1490,6 +1494,8 @@ class NoodleCommunity(Community):
         known_minters = set(nx.get_node_attributes(self.known_graph, 'minter').keys())
         if not self.ipv8:
             self.logger.warning('No IPv8 service object available, cannot start SubTrustCommunity')
+        if hexlify(self.my_peer.public_key.key_to_bin()) in self.settings.crawlers:
+            self.logger.warning("I am a crawler - not forming subtrust community")
         elif (peer.public_key.key_to_bin() in known_minters or not self.settings.minters) and peer.mid not in self.pex:
             self.logger.info("Creating SubTrustCommunity around peer %s", peer)
             community = SubTrustCommunity(self.my_peer, self.ipv8.endpoint, Network(),
