@@ -55,6 +55,100 @@ class PeerCrawlRequestPayload(Payload):
         return PeerCrawlRequestPayload(seq_num, crawl_id, pack_except)
 
 
+class AuditRequestPayload(Payload):
+    """
+    Request an audit of some peer status.
+    """
+
+    format_list = ['Q', 'varlenI']
+
+    def __init__(self, audit_id, peer_status):
+        super(AuditRequestPayload, self).__init__()
+        self.audit_id = audit_id
+        self.peer_status = peer_status
+
+    def to_pack_list(self):
+        data = [('Q', self.audit_id),
+                ('varlenI', self.peer_status)]
+
+        return data
+
+    @classmethod
+    def from_unpack_list(cls, audit_id, peer_status):
+        return AuditRequestPayload(audit_id, peer_status)
+
+
+class AuditProofPayload(Payload):
+    """
+    Payload that holds an audit proof.
+    """
+
+    format_list = ['Q', 'varlenI']
+
+    def __init__(self, audit_id, audit_proof):
+        super(AuditProofPayload, self).__init__()
+        self.audit_id = audit_id
+        self.audit_proof = audit_proof
+
+    def to_pack_list(self):
+        data = [('Q', self.audit_id),
+                ('varlenI', self.audit_proof)]
+
+        return data
+
+    @classmethod
+    def from_unpack_list(cls, audit_id, audit_proof):
+        return AuditProofPayload(audit_id, audit_proof)
+
+
+class AuditProofRequestPayload(Payload):
+    """
+    Payload that holds a request for an audit proof.
+    """
+
+    format_list = ['l', 'Q']
+
+    def __init__(self, seq_num, crawl_id):
+        super(AuditProofRequestPayload, self).__init__()
+        self.seq_num = seq_num
+        self.crawl_id = crawl_id
+
+    def to_pack_list(self):
+        data = [('l', self.seq_num),
+                ('Q', self.crawl_id)]
+
+        return data
+
+    @classmethod
+    def from_unpack_list(cls, seq_num, crawl_id):
+        return AuditProofRequestPayload(seq_num, crawl_id)
+
+
+class AuditProofResponsePayload(Payload):
+    """
+    Payload that holds the response with an audit proof or peer status.
+    """
+
+    format_list = ['Q', 'varlenI', '?']
+
+    def __init__(self, audit_id, item, is_proof):
+        super(AuditProofResponsePayload, self).__init__()
+        self.audit_id = audit_id
+        self.item = item
+        self.is_proof = is_proof
+
+    def to_pack_list(self):
+        data = [('Q', self.audit_id),
+                ('varlenI', self.item),
+                ('?', self.is_proof)]
+
+        return data
+
+    @classmethod
+    def from_unpack_list(cls, audit_id, item, is_proof):
+        return AuditProofResponsePayload(audit_id, item, is_proof)
+
+
 class PeerCrawlResponsePayload(Payload):
     """
     Request a crawl that will estimate the balance of a peer that is not older than some seq_num

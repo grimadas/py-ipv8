@@ -197,3 +197,75 @@ class NoodleCrawlRequestCache(NumberCache):
     def on_timeout(self):
         self._logger.info("Timeout for noodle crawl with id %d", self.number)
         self.crawl_deferred.callback(self.received_half_blocks)
+
+
+class AuditRequestCache(NumberCache):
+    """
+    This request cache keeps track of outstanding audit requests.
+    """
+    CACHE_IDENTIFIER = u"audit"
+
+    def __init__(self, community, crawl_id, audit_deferred, total_expected_audits):
+        super(AuditRequestCache, self).__init__(community.request_cache, self.CACHE_IDENTIFIER, crawl_id)
+        self.logger = logging.getLogger(self.__class__.__name__)
+        self.community = community
+        self.audit_deferred = audit_deferred
+        self.received_audit_proofs = []
+        self.total_expected_audits = total_expected_audits
+
+    @property
+    def timeout_delay(self):
+        return self.community.settings.audit_request_timeout
+
+    def received_audit_proof(self, audit_proof):
+        self.received_audit_proofs.append(audit_proof)
+
+        if len(self.received_audit_proofs) >= self.total_expected_audits:
+            self.community.request_cache.pop(self.CACHE_IDENTIFIER, self.number)
+            reactor.callFromThread(self.audit_deferred.callback, self.received_audit_proofs)
+
+    def received_empty_response(self):
+        self.community.request_cache.pop(self.CACHE_IDENTIFIER, self.number)
+        reactor.callFromThread(self.audit_deferred.callback, self.received_audit_proofs)
+
+    def on_timeout(self):
+        self._logger.info("Timeout for audit with id %d", self.number)
+        self.audit_deferred.callback(self.received_audit_proofs)
+
+
+class AuditProofRequestCache(NumberCache):
+    """
+    This request cache keeps track of outstanding audit proof requests.
+    We expect the peer status and some audit proofs, so a total of two pieces of information.
+    """
+    CACHE_IDENTIFIER = u"proof-request"
+
+    def __init__(self, community, crawl_id, audit_deferred):
+        super(AuditProofRequestCache, self).__init__(community.request_cache, self.CACHE_IDENTIFIER, crawl_id)
+        self.logger = logging.getLogger(self.__class__.__name__)
+        self.community = community
+        self.audit_deferred = audit_deferred
+        self.peer_status = None
+        self.audit_proofs = None
+
+    @property
+    def timeout_delay(self):
+        return self.community.settings.audit_proof_request_timeout
+
+    def received_peer_status(self, peer_status):
+        self.peer_status = peer_status
+
+        if self.peer_status and self.audit_proofs:
+            self.community.request_cache.pop(self.CACHE_IDENTIFIER, self.number)
+            reactor.callFromThread(self.audit_deferred.callback, (self.peer_status, self.audit_proofs))
+
+    def received_audit_proof(self, audit_proofs):
+        self.audit_proofs = audit_proofs
+
+        if self.peer_status and self.audit_proofs:
+            self.community.request_cache.pop(self.CACHE_IDENTIFIER, self.number)
+            reactor.callFromThread(self.audit_deferred.callback, (self.peer_status, self.audit_proofs))
+
+    def on_timeout(self):
+        self._logger.info("Timeout for audit proof request with id %d", self.number)
+        self.audit_deferred.callback(None)

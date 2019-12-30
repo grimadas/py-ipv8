@@ -52,7 +52,7 @@ class NoodleSettings(object):
         self.security_mode = SecurityMode.VANILLA
 
         # Security epsilon
-        self.com_size = 5
+        self.com_size = 2
 
         # Tolerated inconsistency risk
         self.risk = 0
@@ -65,3 +65,7 @@ class NoodleSettings(object):
 
         # Minter identities that we accept (if this is an empty set, everyone is an minter)
         self.minters = [b"4c69624e61434c504b3a6ddcd9ce2c463c87b0899187975b9dc6322e193c7c891c7b6841015fa3b1640d7783a710053f551073271f511944e48d73fbb7928e3e0037f6611cf22a97e21f"]
+
+        # Cache timeouts (in seconds)
+        self.audit_request_timeout = 20.0
+        self.audit_proof_request_timeout = 20.0

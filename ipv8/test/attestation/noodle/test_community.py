@@ -231,6 +231,7 @@ class TestNoodleCommunityFiveNodes(TestNoodleCommunityBase):
         yield self.sleep(1.0)
         self.assertLess(self.nodes[2].overlay.persistence.get_balance(id_2), 0)
 
+
 class TestNoodleCommunityTwoNodesAudits(TestNoodleCommunityBase):
     __testing__ = True
 

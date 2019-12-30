@@ -8,6 +8,7 @@ import random
 import struct
 from binascii import hexlify, unhexlify
 from functools import wraps
+from json.decoder import JSONDecodeError
 from threading import RLock
 
 import networkx as nx
@@ -17,7 +18,8 @@ from twisted.internet.defer import Deferred, fail, inlineCallbacks, maybeDeferre
 from twisted.internet.task import LoopingCall
 
 from .block import ANY_COUNTERPARTY_PK, EMPTY_PK, GENESIS_SEQ, NoodleBlock, UNKNOWN_SEQ, ValidationResult
-from .caches import ChainCrawlCache, CrawlRequestCache, HalfBlockSignCache, IntroCrawlTimeout, NoodleCrawlRequestCache
+from .caches import ChainCrawlCache, CrawlRequestCache, HalfBlockSignCache, IntroCrawlTimeout, NoodleCrawlRequestCache, \
+    AuditRequestCache, AuditProofRequestCache
 from .database import NoodleDB
 from .exceptions import InsufficientBalanceException, NoPathFoundException
 from .listener import BlockListener
@@ -121,7 +123,8 @@ class NoodleCommunity(Community):
             chr(10): self.received_audit_proofs,
             chr(11): self.received_audit_proofs_request,
             chr(12): self.received_audit_request,
-            chr(13): self.received_mint_request
+            chr(13): self.received_mint_request,
+            chr(14): self.received_audit_proofs_response
         })
 
         # Add the listener
@@ -717,7 +720,7 @@ class NoodleCommunity(Community):
             listener.received_block(block)
 
     @synchronized
-    def process_half_block(self, blk, peer, proofs=None):
+    def process_half_block(self, blk, peer, status=None, audit_proofs=None):
         """
         Process a received half block.
         """
@@ -725,9 +728,9 @@ class NoodleCommunity(Community):
         self.logger.info("Block validation result %s, %s, (%s)", validation[0], validation[1], blk)
         if not self.settings.ignore_validation and validation[0] == ValidationResult.invalid:
             return fail(RuntimeError("Block could not be validated: %s, %s" % (validation[0], validation[1])))
-        if proofs:
-            # validate proof for the block
-            if not self.validate_audit_proofs(proofs, blk, peer):
+        if status and audit_proofs:
+            # validate status and audit proofs for the block
+            if not self.validate_audit_proofs(status, audit_proofs, blk):
                 return fail(RuntimeError("Block proofs are not valid, refusing to sign: %s" % blk))
 
         # Check if we are waiting for this signature response
@@ -759,9 +762,9 @@ class NoodleCommunity(Community):
 
         # determine if we want to sign this block
         return addCallback(maybeDeferred(self.should_sign, blk),
-                           lambda ss, blk=blk, proofs=proofs, peer=peer: self.on_should_sign_outcome(ss, blk, proofs, peer))
+                           lambda ss, blk=blk, peer=peer, status=status, audit_proofs=audit_proofs: self.on_should_sign_outcome(ss, blk, peer, status, audit_proofs))
 
-    def on_should_sign_outcome(self, should_sign, blk, proofs, peer):
+    def on_should_sign_outcome(self, should_sign, blk, peer, status, audit_proofs):
         if not should_sign:
             self.logger.info("Not signing block %s", blk)
             return succeed(None)
@@ -772,11 +775,10 @@ class NoodleCommunity(Community):
             #  1) If estimated balance less than zero
             #  2) If no proofs attached, no recent local proofs and depending on risk
             if self.persistence.get_balance(peer_id) < 0 or \
-                        (not proofs and not self.persistence.get_peer_proofs(peer_id, blk.sequence_number) and
+                        (not status and not audit_proofs and not self.persistence.get_peer_proofs(peer_id, blk.sequence_number) and
                          random.random() > self.settings.risk):
-                crawl_deferred = self.validate_claims(blk, peer)
-                return addCallback(crawl_deferred, lambda audit_proofs: self.process_half_block(blk, peer,
-                                                                                                audit_proofs))
+                crawl_deferred = self.validate_spend(blk, peer)
+                return addCallback(crawl_deferred, lambda status_and_proofs: self.process_half_block(blk, peer, *status_and_proofs))
             if 'condition' in blk.transaction:
                 pub_key = unhexlify(blk.transaction['condition'])
                 if self.my_peer.public_key.key_to_bin() != pub_key:
@@ -805,21 +807,22 @@ class NoodleCommunity(Community):
 
             return self.sign_block(peer, linked=blk, block_type=b'claim')
 
-    def validate_claims(self, last_block, peer):
-        from_peer = self.persistence.key_to_id(last_block.public_key)
+    def validate_spend(self, spend_block, peer):
+        from_peer = self.persistence.key_to_id(spend_block.public_key)
         crawl_id = self.persistence.id_to_int(from_peer)
-        if not self.request_cache.has(u"noodle-crawl", crawl_id):
+        if not self.request_cache.has(u"proof-request", crawl_id):
             # Need to get more information from the peer to verify the claim
-            self.logger.info("Request the peer status and audit proofs %s:%s", crawl_id, last_block.sequence_number)
+            self.logger.info("Requesting the status and audit proofs %s:%d from peer %s:%d",
+                             crawl_id, spend_block.sequence_number, peer.address[0], peer.address[1])
             except_pack = json.dumps(list())
             if self.settings.security_mode == SecurityMode.VANILLA:
                 crawl_deferred = self.send_peer_crawl_request(crawl_id, peer,
-                                                              last_block.sequence_number, except_pack)
+                                                              spend_block.sequence_number, except_pack)
             else:
-                crawl_deferred = self.send_audit_proofs_request(peer, last_block.sequence_number, crawl_id)
+                crawl_deferred = self.send_audit_proofs_request(peer, spend_block.sequence_number, crawl_id)
             return crawl_deferred
         else:
-            return self.request_cache.get(u'noodle-crawl', crawl_id).crawl_deferred
+            return self.request_cache.get(u'proof-request', crawl_id).crawl_deferred
 
     def verify_audit(self, status, audit):
         # This is a claim of a conditional transaction
@@ -833,59 +836,45 @@ class NoodleCommunity(Community):
         # TODO attach proof to transaction
         self.self_sign_block(block_type=b'alert', transaction=tx)
 
-    def validate_audit_proofs(self, proofs, block, peer):
+    def validate_audit_proofs(self, raw_status, raw_audit_proofs, block):
         self.logger.info("Received audit proofs for block %s", block)
         if self.settings.security_mode == SecurityMode.VANILLA:
             return True
-        p1 = json.loads(proofs[0])
-        p2 = json.loads(proofs[1])
-        if 'spends' in p1:
-            pack_stat = proofs[0]
-            pack_audit = proofs[1]
-            status = p1
-            audits = p2
-        elif 'spends' in p2:
-            pack_stat = proofs[1]
-            pack_audit = proofs[0]
-            status = p2
-            audits = p1
-        else:
-            self.logger.error("Audits proofs are illformed")
-            return False
 
-        for v in audits.items():
-            if not self.verify_audit(pack_stat, v):
-                self.logger.error("Audit did not validate %s %s", v,
-                                  status)
+        status = json.loads(raw_status)
+        audit_proofs = json.loads(raw_audit_proofs)
+
+        for v in audit_proofs.items():
+            if not self.verify_audit(raw_status, v):
+                self.logger.error("Audit did not validate %s %s", v, status)
 
         peer_id = self.persistence.key_to_id(block.public_key)
         # Put audit status into the local db
         result = self.verify_peer_status(peer_id, status)
         if result == ValidationResult.invalid:
             # Alert: Peer is provably hiding a transaction
-            self.logger.error("Peer is hiding transactions  %s", result.errors)
+            self.logger.error("Peer is hiding transactions %s", result.errors)
             self.trigger_security_alert(peer_id, result.errors)
             return False
 
         res = self.persistence.dump_peer_status(peer_id, status)
-        self.persistence.add_peer_proofs(peer_id, status['seq_num'], status, pack_audit)
+        self.persistence.add_peer_proofs(peer_id, status['seq_num'], status, raw_audit_proofs)
         return res
 
     def finalize_audits(self, audit_seq, status, audits):
-        self.logger.info("Audit with seq number %s finalized", audit_seq)
+        self.logger.info("Audit with sequence number %d finalized (audits: %d)", audit_seq, len(audits))
         full_audit = dict(audits)
-        packet = json.dumps(full_audit)
+        proofs = json.dumps(full_audit)
         # Update database audit proofs
         my_id = self.persistence.key_to_id(self.my_peer.public_key.key_to_bin())
-        self.persistence.add_peer_proofs(my_id, audit_seq, status, packet)
+        self.persistence.add_peer_proofs(my_id, audit_seq, status, proofs)
         # Get peers requested
         processed_ids = set()
         for seq, peers_val in list(self.audit_requests.items()):
             if seq <= audit_seq:
                 for p, audit_id in peers_val:
                     if (p, audit_id) not in processed_ids:
-                        self.send_audit_proofs(p, audit_id, packet)
-                        self.send_audit_proofs(p, audit_id, status)
+                        self.respond_with_audit_proof(p, audit_id, proofs, status)
                         processed_ids.add((p, audit_id))
                 del self.audit_requests[seq]
 
@@ -900,60 +889,50 @@ class NoodleCommunity(Community):
         if not block:
             self.logger.info("Peer has no block for audit. Skipping audit for now.")
             return
+
         seq_num = block.sequence_number
         seed = peer_key + bytes(seq_num)
         selected_peers = self.choose_community_peers(peer_list, seed, min(self.settings.com_size, len(peer_list)))
-        s1 = self.form_peer_status_response(peer_key, selected_peers)
+        if not selected_peers:
+            self.logger.info("There are no peers in the community to ask for an audit, skipping audit for now.")
+            return
+
+        # Do we already have audit proofs for this sequence number? If so, don't ask for more proofs
+        my_id = self.persistence.key_to_id(peer_key)
+        if self.persistence.get_peer_proofs(my_id, seq_num):
+            self.logger.info("Skipping audit since we already have proofs for our last block.")
+            return
+
+        peer_status = self.form_peer_status_response(peer_key, selected_peers)
         # Send an audit request for the block + seq num
         # Now we send status + seq_num
         crawl_id = self.persistence.id_to_int(self.persistence.key_to_id(peer_key))
-        # crawl_id = int(str(crawl_id))
-        # Check if there are active crawl requests for this sequence number
-        if not self.request_cache.get(u'crawl', crawl_id):
-            crawl_deferred = Deferred()
-            self.request_cache.add(NoodleCrawlRequestCache(self, crawl_id, crawl_deferred,
-                                                           total_blocks=len(selected_peers), status=s1))
-            self.logger.info("Requesting an audit from %s peers", len(selected_peers))
+        # Check if there are active audit requests for this peer
+        if not self.request_cache.get(u'audit', crawl_id):
+            audit_deferred = Deferred()
+            self.request_cache.add(AuditRequestCache(self, crawl_id, audit_deferred,
+                                                     total_expected_audits=len(selected_peers)))
+            self.logger.info("Requesting an audit for sequence number %d from %d peers", seq_num, len(selected_peers))
             for peer in selected_peers:
-                self.send_peer_audit_request(peer, crawl_id, s1)
+                self.send_audit_request(peer, crawl_id, peer_status)
             # when enough audits received, finalize
-            return addCallback(crawl_deferred, lambda audits: self.finalize_audits(seq_num, s1, audits))
+            return addCallback(audit_deferred, lambda audits: self.finalize_audits(seq_num, peer_status, audits))
 
     def choose_community_peers(self, com_peers, current_seed, commitee_size):
-        random.seed(current_seed)
-        return random.sample(com_peers, commitee_size)
-
-    @synchronized
-    @lazy_wrapper_unsigned_wd(GlobalTimeDistributionPayload, PeerCrawlRequestPayload)
-    def received_audit_proofs_request(self, source_address, dist, payload, data):
-        # get last collected audit proof
-        my_id = self.persistence.key_to_id(self.my_peer.public_key.key_to_bin())
-        pack = self.persistence.get_peer_proofs(my_id, int(payload.seq_num))
-        if pack:
-            seq_num, status, proofs = pack
-            # There is an audit request peer can answer
-            self.send_audit_proofs(source_address, payload.crawl_id, proofs)
-            self.send_audit_proofs(source_address, payload.crawl_id, status)
-        else:
-            # There is no ready audit. Remember and answer later
-            self._logger.info("Adding audit proof request from %s:%d (id: %d) to cache",
-                              source_address[0], source_address[1], payload.crawl_id)
-            if payload.seq_num not in self.audit_requests:
-                self.audit_requests[payload.seq_num] = []
-            self.audit_requests[payload.seq_num].append((source_address, payload.crawl_id))
+        rand = random.Random(current_seed)
+        return rand.sample(com_peers, commitee_size)
 
     def send_audit_proofs_request(self, peer, seq_num, audit_id):
         """
-        Send an audit proof for the peer;
-        Expect status and audit proofs for the status
+        Request audit proofs for some sequence number from a specific peer.
         """
         self._logger.debug("Sending audit proof request to peer %s:%d (seq num: %d, id: %s)",
                            peer.address[0], peer.address[1], seq_num, audit_id)
         crawl_deferred = Deferred()
-        self.request_cache.add(NoodleCrawlRequestCache(self, audit_id, crawl_deferred, total_blocks=2))
+        self.request_cache.add(AuditProofRequestCache(self, audit_id, crawl_deferred))
 
         global_time = self.claim_global_time()
-        payload = PeerCrawlRequestPayload(seq_num, audit_id, json.dumps(list())).to_pack_list()
+        payload = AuditProofRequestPayload(seq_num, audit_id).to_pack_list()
         dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
 
         packet = self._ez_pack(self._prefix, 11, [dist, payload], False)
@@ -961,79 +940,123 @@ class NoodleCommunity(Community):
         return crawl_deferred
 
     @synchronized
-    @lazy_wrapper_unsigned_wd(GlobalTimeDistributionPayload, PeerCrawlResponsePayload)
-    def received_audit_proofs(self, source_address, dist, payload, data):
-        cache = self.request_cache.get(u"noodle-crawl", payload.crawl_id)
-        if cache:
-            if 'status' in cache.added:
-                # status is known => This is audit collection initiated by my peer
-                audit = json.loads(payload.chain)
-                status = cache.added['status']
-                # TODO: if audit not valid/resend with bigger peer set
-                for v in audit.items():
-                    cache.received_block(v)
-            else:
-                # Status is unknown - request status from the collector
-                cache.received_block(payload.chain)
-
-    def send_audit_proofs(self, address, audit_id, audit_proofs):
-        """
-        Send audit proofs
-        """
-        self.logger.info("Sending audit prof %s to %s", audit_id, address)
-        global_time = self.claim_global_time()
-        payload = PeerCrawlResponsePayload(audit_id, audit_proofs).to_pack_list()
-        dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
-
-        packet = self._ez_pack(self._prefix, 10, [dist, payload], False)
-        self.endpoint.send(address, packet)
-
-    def perform_audit(self, source_address, audit_request):
-        peer_id = self.persistence.int_to_id(audit_request.crawl_id)
-        # TODO: add verifications
-        peer_status = json.loads(audit_request.chain)
-        # Verify peer status
-        result = self.verify_peer_status(peer_id, peer_status)
-        if result.state == ValidationResult.invalid:
-            # Alert: Peer is provably hiding a transaction
-            self.logger.error("Peer is hiding transactions  %s", result.errors)
-            self.trigger_security_alert(peer_id, result.errors)
+    @lazy_wrapper_unsigned_wd(GlobalTimeDistributionPayload, AuditProofRequestPayload)
+    def received_audit_proofs_request(self, source_address, dist, payload, data):
+        # get the last collected audit proof and send it back
+        my_id = self.persistence.key_to_id(self.my_peer.public_key.key_to_bin())
+        pack = self.persistence.get_peer_proofs(my_id, int(payload.seq_num))
+        if pack:
+            seq_num, status, proofs = pack
+            # There is an audit request peer can answer
+            self.respond_with_audit_proof(source_address, payload.crawl_id, proofs, status)
         else:
-            if self.persistence.dump_peer_status(peer_id, peer_status):
-                # Create an audit proof for the this sequence
-                seq_num = peer_status['seq_num']
-                self.persistence.add_peer_proofs(peer_id, seq_num, peer_status, None)
-                # Create an audit proof for the this sequence
-                sign = default_eccrypto.create_signature(self.my_peer.key, audit_request.chain)
-                # create an audit proof
-                audit = {}
-                my_id = hexlify(self.my_peer.public_key.key_to_bin()).decode()
-                audit[my_id] = hexlify(sign).decode()
-                self.send_audit_proofs(source_address, audit_request.crawl_id, json.dumps(audit))
-            else:
-                # This is invalid audit request, refusing to sign
-                self.logger.error("Received invalid audit request id %s", audit_request.crawl_id)
+            # There are no proofs that we can provide to this peer.
+            # Remember the request and answer later, when we received enough proofs.
+            self._logger.info("Adding audit proof request from %s:%d (id: %d) to cache",
+                              source_address[0], source_address[1], payload.crawl_id)
+            if payload.seq_num not in self.audit_requests:
+                self.audit_requests[payload.seq_num] = []
+            self.audit_requests[payload.seq_num].append((source_address, payload.crawl_id))
+
+    def respond_with_audit_proof(self, address, audit_id, proofs, status):
+        """
+        Send audit proofs and status back to a specific peer, based on a request.
+        """
+        self.logger.info("Responding with audit proof %s to peer %s:%d", audit_id, address[0], address[1])
+        for item in [proofs, status]:
+            global_time = self.claim_global_time()
+            payload = AuditProofResponsePayload(audit_id, item, item == proofs).to_pack_list()
+            dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
+
+            packet = self._ez_pack(self._prefix, 14, [dist, payload], False)
+            self.endpoint.send(address, packet)
 
     @synchronized
-    @lazy_wrapper(GlobalTimeDistributionPayload, PeerCrawlResponsePayload)
-    def received_audit_request(self, peer, dist, payload):
-        # TODO: Add DOS protection
-        self.logger.info("Received audit request %s from %s:%d", payload.crawl_id, peer.address[0], peer.address[1])
-        # Might be an active audit request -> verify the status/send chain tests
-        self.perform_audit(peer.address, payload)
+    @lazy_wrapper_unsigned_wd(GlobalTimeDistributionPayload, AuditProofResponsePayload)
+    def received_audit_proofs_response(self, source_address, dist, payload, data):
+        cache = self.request_cache.get(u'proof-request', payload.audit_id)
+        if cache:
+            if payload.is_proof:
+                cache.received_audit_proof(payload.item)
+            else:
+                cache.received_peer_status(payload.item)
+        else:
+            self.logger.info("Received audit proof response for non-existent cache with id %s", payload.audit_id)
 
-    def send_peer_audit_request(self, peer, crawl_id, chain):
+    @synchronized
+    @lazy_wrapper_unsigned_wd(GlobalTimeDistributionPayload, AuditProofPayload)
+    def received_audit_proofs(self, source_address, dist, payload, data):
+        cache = self.request_cache.get(u'audit', payload.audit_id)
+        if cache:
+            # status is known => This is audit collection initiated by my peer
+            audit = json.loads(payload.audit_proof)
+            # TODO: if audit not valid/resend with bigger peer set
+            for v in audit.items():
+                cache.received_audit_proof(v)
+        else:
+            self.logger.info("Received audit proof for non-existent cache with id %s", payload.audit_id)
+
+    def send_audit_request(self, peer, crawl_id, peer_status):
         """
-        Send an audit request to a peer
+        Ask target peer for an audit of your chain.
         """
         self._logger.info("Sending audit request to peer %s:%d", peer.address[0], peer.address[1])
         global_time = self.claim_global_time()
         auth = BinMemberAuthenticationPayload(self.my_peer.public_key.key_to_bin()).to_pack_list()
-        payload = PeerCrawlResponsePayload(crawl_id, chain).to_pack_list()
+        payload = AuditRequestPayload(crawl_id, peer_status).to_pack_list()
         dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
 
         packet = self._ez_pack(self._prefix, 12, [auth, dist, payload])
         self.endpoint.send(peer.address, packet)
+
+    @synchronized
+    @lazy_wrapper(GlobalTimeDistributionPayload, AuditRequestPayload)
+    def received_audit_request(self, peer, dist, payload):
+        # TODO: Add DOS protection
+        self.logger.info("Received audit request %s from peer %s:%d", payload.audit_id, peer.address[0], peer.address[1])
+        self.perform_audit(peer.address, payload)
+
+    def perform_audit(self, source_address, audit_request):
+        peer_id = self.persistence.int_to_id(audit_request.audit_id)
+        # TODO: add verifications
+        try:
+            peer_status = json.loads(audit_request.peer_status)
+            # Verify peer status
+            result = self.verify_peer_status(peer_id, peer_status)
+            if result.state == ValidationResult.invalid:
+                # Alert: Peer is provably hiding a transaction
+                self.logger.error("Peer is hiding transactions: %s", result.errors)
+                self.trigger_security_alert(peer_id, result.errors)
+            else:
+                if self.persistence.dump_peer_status(peer_id, peer_status):
+                    # Create an audit proof for the this sequence and send it back
+                    seq_num = peer_status['seq_num']
+                    self.persistence.add_peer_proofs(peer_id, seq_num, peer_status, None)
+                    # Create an audit proof for the this sequence
+                    signature = default_eccrypto.create_signature(self.my_peer.key, audit_request.peer_status)
+                    # create an audit proof
+                    audit = {}
+                    my_id = hexlify(self.my_peer.public_key.key_to_bin()).decode()
+                    audit[my_id] = hexlify(signature).decode()
+                    self.send_audit_proofs(source_address, audit_request.audit_id, json.dumps(audit))
+                else:
+                    # This is invalid audit request, refusing to sign
+                    self.logger.error("Received invalid audit request id %s", audit_request.crawl_id)
+        except JSONDecodeError:
+            self.logger.info("Invalid JSON received in audit request from peer %s:%d!",
+                             source_address[0], source_address[1])
+
+    def send_audit_proofs(self, address, audit_id, audit_proofs):
+        """
+        Send audit proofs back to a specific peer, based on a requested audit.
+        """
+        self.logger.info("Sending audit proof %s to peer %s:%d", audit_id, address[0], address[1])
+        global_time = self.claim_global_time()
+        payload = AuditProofPayload(audit_id, audit_proofs).to_pack_list()
+        dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
+
+        packet = self._ez_pack(self._prefix, 10, [dist, payload], False)
+        self.endpoint.send(address, packet)
 
     @synchronized
     @lazy_wrapper(GlobalTimeDistributionPayload, MintRequestPayload)
@@ -1114,8 +1137,8 @@ class NoodleCommunity(Community):
         self.endpoint.send(peer.address, packet)
 
     def form_peer_status_response(self, public_key, exception_peer_list=None):
+        status = self.persistence.get_peer_status(public_key)
         if self.settings.is_hiding:
-            status = self.persistence.get_peer_status(public_key)
             # Hide the top spend excluding the peer that asked it
             except_peers = set()
             for peer in exception_peer_list:
@@ -1130,7 +1153,7 @@ class NoodleCommunity(Community):
             if hiding:
                 self.logger.warning("Hiding info in status")
             return json.dumps(status)
-        return json.dumps(self.persistence.get_peer_status(public_key))
+        return json.dumps(status)
 
     @synchronized
     @lazy_wrapper(GlobalTimeDistributionPayload, PeerCrawlRequestPayload)
