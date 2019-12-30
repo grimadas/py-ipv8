@@ -777,8 +777,8 @@ class NoodleCommunity(Community):
             if self.persistence.get_balance(peer_id) < 0 or \
                         (not status and not audit_proofs and not self.persistence.get_peer_proofs(peer_id, blk.sequence_number) and
                          random.random() > self.settings.risk):
-                crawl_deferred = self.validate_spend(blk, peer)
-                return addCallback(crawl_deferred, lambda status_and_proofs: self.process_half_block(blk, peer, *status_and_proofs))
+                request_info_deferred = self.validate_spend(blk, peer)
+                return addCallback(request_info_deferred, lambda status_and_proofs: self.process_half_block(blk, peer, *status_and_proofs))
             if 'condition' in blk.transaction:
                 pub_key = unhexlify(blk.transaction['condition'])
                 if self.my_peer.public_key.key_to_bin() != pub_key:
@@ -810,19 +810,22 @@ class NoodleCommunity(Community):
     def validate_spend(self, spend_block, peer):
         from_peer = self.persistence.key_to_id(spend_block.public_key)
         crawl_id = self.persistence.id_to_int(from_peer)
-        if not self.request_cache.has(u"proof-request", crawl_id):
+        cache = self.request_cache.get(u"proof-request", crawl_id)
+        if not cache:
             # Need to get more information from the peer to verify the claim
             self.logger.info("Requesting the status and audit proofs %s:%d from peer %s:%d",
                              crawl_id, spend_block.sequence_number, peer.address[0], peer.address[1])
             except_pack = json.dumps(list())
             if self.settings.security_mode == SecurityMode.VANILLA:
-                crawl_deferred = self.send_peer_crawl_request(crawl_id, peer,
+                deferred = self.send_peer_crawl_request(crawl_id, peer,
                                                               spend_block.sequence_number, except_pack)
             else:
-                crawl_deferred = self.send_audit_proofs_request(peer, spend_block.sequence_number, crawl_id)
-            return crawl_deferred
+                deferred = self.send_audit_proofs_request(peer, spend_block.sequence_number, crawl_id)
+            return deferred
         else:
-            return self.request_cache.get(u'proof-request', crawl_id).crawl_deferred
+            deferred = Deferred()
+            cache.deferreds.append(deferred)
+            return deferred
 
     def verify_audit(self, status, audit):
         # This is a claim of a conditional transaction
@@ -928,8 +931,10 @@ class NoodleCommunity(Community):
         """
         self._logger.debug("Sending audit proof request to peer %s:%d (seq num: %d, id: %s)",
                            peer.address[0], peer.address[1], seq_num, audit_id)
-        crawl_deferred = Deferred()
-        self.request_cache.add(AuditProofRequestCache(self, audit_id, crawl_deferred))
+        request_deferred = Deferred()
+        cache = AuditProofRequestCache(self, audit_id)
+        cache.deferreds.append(request_deferred)
+        self.request_cache.add(cache)
 
         global_time = self.claim_global_time()
         payload = AuditProofRequestPayload(seq_num, audit_id).to_pack_list()
@@ -937,7 +942,7 @@ class NoodleCommunity(Community):
 
         packet = self._ez_pack(self._prefix, 11, [dist, payload], False)
         self.endpoint.send(peer.address, packet)
-        return crawl_deferred
+        return request_deferred
 
     @synchronized
     @lazy_wrapper_unsigned_wd(GlobalTimeDistributionPayload, AuditProofRequestPayload)

@@ -240,11 +240,11 @@ class AuditProofRequestCache(NumberCache):
     """
     CACHE_IDENTIFIER = u"proof-request"
 
-    def __init__(self, community, crawl_id, audit_deferred):
+    def __init__(self, community, crawl_id):
         super(AuditProofRequestCache, self).__init__(community.request_cache, self.CACHE_IDENTIFIER, crawl_id)
         self.logger = logging.getLogger(self.__class__.__name__)
         self.community = community
-        self.audit_deferred = audit_deferred
+        self.deferreds = []
         self.peer_status = None
         self.audit_proofs = None
 
@@ -257,15 +257,18 @@ class AuditProofRequestCache(NumberCache):
 
         if self.peer_status and self.audit_proofs:
             self.community.request_cache.pop(self.CACHE_IDENTIFIER, self.number)
-            reactor.callFromThread(self.audit_deferred.callback, (self.peer_status, self.audit_proofs))
+            for deferred in self.deferreds:
+                reactor.callFromThread(deferred.callback, (self.peer_status, self.audit_proofs))
 
     def received_audit_proof(self, audit_proofs):
         self.audit_proofs = audit_proofs
 
         if self.peer_status and self.audit_proofs:
             self.community.request_cache.pop(self.CACHE_IDENTIFIER, self.number)
-            reactor.callFromThread(self.audit_deferred.callback, (self.peer_status, self.audit_proofs))
+            for deferred in self.deferreds:
+                reactor.callFromThread(deferred.callback, (self.peer_status, self.audit_proofs))
 
     def on_timeout(self):
         self._logger.info("Timeout for audit proof request with id %d", self.number)
-        self.audit_deferred.callback(None)
+        for deferred in self.deferreds:
+            reactor.callFromThread(deferred.callback, None)

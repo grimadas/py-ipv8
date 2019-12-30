@@ -282,3 +282,25 @@ class TestNoodleCommunityTwoNodesAudits(TestNoodleCommunityBase):
         my_pk = self.nodes[1].overlay.my_peer.public_key.key_to_bin()
         my_id = self.nodes[1].overlay.persistence.key_to_id(my_pk)
         self.assertEqual(self.nodes[1].overlay.persistence.get_balance(my_id), 10)
+
+    @inlineCallbacks
+    def test_transfer_no_risk_multiple(self):
+        """
+        Test multiple transfers in quick succession with audits and no risk.
+        """
+        yield self.introduce_nodes()
+        yield self.nodes[0].overlay.mint()
+        yield self.sleep(0.1)  # To allow the receivers of the mint block to update their caches
+        for _ in range(5):
+            self.nodes[0].overlay.transfer(self.nodes[1].overlay.my_peer, 10)
+
+        yield self.sleep(1)
+
+        my_pk = self.nodes[0].overlay.my_peer.public_key.key_to_bin()
+        my_id = self.nodes[0].overlay.persistence.key_to_id(my_pk)
+        self.assertEqual(self.nodes[0].overlay.persistence.get_balance(my_id),
+                         self.nodes[0].overlay.settings.initial_mint_value - 50)
+
+        my_pk = self.nodes[1].overlay.my_peer.public_key.key_to_bin()
+        my_id = self.nodes[1].overlay.persistence.key_to_id(my_pk)
+        self.assertEqual(self.nodes[1].overlay.persistence.get_balance(my_id), 50)
