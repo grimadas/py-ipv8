@@ -615,7 +615,7 @@ class NoodleCommunity(Community):
         """
         peer = Peer(payload.public_key, source_address)
         block = self.get_block_class(payload.type).from_payload(payload, self.serializer)
-        self.process_half_block(block, peer).addErrback(lambda _: None)
+        addCallback(self.process_half_block(block, peer), lambda _: None)
 
     @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, HalfBlockBroadcastPayload)
     def received_half_block_broadcast(self, source_address, dist, payload):
