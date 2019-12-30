@@ -210,7 +210,7 @@ class NoodleCommunity(Community):
         Transfer funds to a random peer.
         """
         if self.get_my_balance() <= 0:
-            self.ask_minters_for_funds()
+            self.mint()
             return
 
         if not self.get_peers():
