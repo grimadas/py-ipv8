@@ -62,7 +62,7 @@ class OrigTrustChainCommunity(Community):
         self.logger = logging.getLogger(self.__class__.__name__)
         self.persistence = self.DB_CLASS(working_directory, db_name, self.my_peer.public_key.key_to_bin())
         self.relayed_broadcasts = []
-        self.logger.debug("The trustchain community started with Public Key: %s",
+        self.logger.debug("The classic trustchain community started with Public Key: %s",
                           hexlify(self.my_peer.public_key.key_to_bin()))
         self.shutting_down = False
         self.listeners_map = {}  # Map of block_type -> [callbacks]
