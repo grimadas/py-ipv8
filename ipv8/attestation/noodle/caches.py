@@ -271,4 +271,5 @@ class AuditProofRequestCache(NumberCache):
     def on_timeout(self):
         self._logger.info("Timeout for audit proof request with id %d", self.number)
         for deferred in self.deferreds:
-            reactor.callFromThread(deferred.callback, None)
+            reactor.callFromThread(deferred.errback,
+                                   RuntimeError("Timeout for audit proof request with id %d" % self.number))
