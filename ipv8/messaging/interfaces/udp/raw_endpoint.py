@@ -103,7 +103,7 @@ class RawUDPEndpoint(Endpoint):
         """
         for _ in range(10000):
             try:
-                self._logger.debug("Listening at %d", self._port)
+                self._logger.debug("Raw endpoint listening at %d", self._port)
                 self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 870400)
                 self._socket.bind((self._ip, self._port))
@@ -111,7 +111,7 @@ class RawUDPEndpoint(Endpoint):
 
                 self._port = self._socket.getsockname()[1]
             except socket.error:
-                self._logger.debug("Listening failed at %d", self._port)
+                self._logger.debug("Raw endpoint listening failed at %d", self._port)
                 self._port += 1
                 continue
             break
