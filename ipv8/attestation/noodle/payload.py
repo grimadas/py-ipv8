@@ -3,6 +3,22 @@ from __future__ import absolute_import
 from ...messaging.payload import Payload
 
 
+class PingPayload(Payload):
+
+    format_list = ['I']
+
+    def __init__(self, identifier):
+        super(PingPayload, self).__init__()
+        self.identifier = identifier
+
+    def to_pack_list(self):
+        return [('I', self.identifier)]
+
+    @classmethod
+    def from_unpack_list(cls, identifier):
+        return PingPayload(identifier)
+
+
 class CrawlRequestPayload(Payload):
     """
     Request a crawl of blocks starting with a specific sequence number or the first if 0.

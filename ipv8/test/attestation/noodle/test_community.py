@@ -146,6 +146,23 @@ class TestNoodleCommunityTwoNodes(TestNoodleCommunityBase):
                          self.nodes[1].overlay.settings.initial_mint_value - 1)
 
     @inlineCallbacks
+    def test_make_random_transfer_ping_timeout(self):
+        """
+        Test that we are not making transactions if the ping to the other peer times out.
+        """
+        yield self.introduce_nodes()
+        self.nodes[0].overlay.settings.ping_timeout = 0.1
+        self.nodes[1].overlay.decode_map[chr(15)] = lambda *_: None  # Ignore incoming pings
+
+        self.nodes[0].overlay.make_random_transfer()
+
+        yield self.sleep(0.2)  # Let the ping timeout
+
+        my_pub_key = self.nodes[0].overlay.my_peer.public_key.key_to_bin()
+        latest_blocks = self.nodes[0].overlay.persistence.get_latest_blocks(my_pub_key)
+        self.assertEqual(len(latest_blocks), 1)
+
+    @inlineCallbacks
     def test_transfer_overspend(self):
         """
         Test an overspend transaction.

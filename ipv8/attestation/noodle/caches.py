@@ -1,6 +1,7 @@
 from __future__ import absolute_import
 
 import logging
+import time
 from binascii import hexlify
 from functools import reduce
 
@@ -8,7 +9,7 @@ from twisted.internet import reactor
 from twisted.internet.defer import Deferred
 from twisted.python.failure import Failure
 
-from ...requestcache import NumberCache
+from ...requestcache import NumberCache, RandomNumberCache
 from ...util import maximum_integer
 
 
@@ -273,3 +274,25 @@ class AuditProofRequestCache(NumberCache):
         for deferred in self.deferreds:
             reactor.callFromThread(deferred.errback,
                                    RuntimeError("Timeout for audit proof request with id %d" % self.number))
+
+
+class PingRequestCache(RandomNumberCache):
+    """
+    This request cache keeps track of all outstanding requests within the DHTCommunity.
+    """
+    def __init__(self, community, msg_type, peer):
+        super(PingRequestCache, self).__init__(community.request_cache, msg_type)
+        self.community = community
+        self.msg_type = msg_type
+        self.peer = peer
+        self.deferred = Deferred()
+        self.start_time = time.time()
+
+    @property
+    def timeout_delay(self):
+        return self.community.settings.ping_timeout
+
+    def on_timeout(self):
+        if not self.deferred.called:
+            self._logger.debug('Ping timeout for peer %s', self.peer)
+            self.deferred.errback(Failure(RuntimeError('Ping timeout for peer {}'.format(self.peer))))

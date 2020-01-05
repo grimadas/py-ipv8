@@ -19,7 +19,7 @@ from twisted.internet.task import LoopingCall
 
 from .block import ANY_COUNTERPARTY_PK, EMPTY_PK, GENESIS_SEQ, NoodleBlock, UNKNOWN_SEQ, ValidationResult
 from .caches import ChainCrawlCache, CrawlRequestCache, HalfBlockSignCache, IntroCrawlTimeout, NoodleCrawlRequestCache, \
-    AuditRequestCache, AuditProofRequestCache
+    AuditRequestCache, AuditProofRequestCache, PingRequestCache
 from .database import NoodleDB
 from .exceptions import InsufficientBalanceException, NoPathFoundException
 from .listener import BlockListener
@@ -124,7 +124,9 @@ class NoodleCommunity(Community):
             chr(11): self.received_audit_proofs_request,
             chr(12): self.received_audit_request,
             chr(13): self.received_mint_request,
-            chr(14): self.received_audit_proofs_response
+            chr(14): self.received_audit_proofs_response,
+            chr(15): self.on_ping_request,
+            chr(16): self.on_ping_response
         })
 
         # Add the listener
@@ -209,6 +211,43 @@ class NoodleCommunity(Community):
         peers = self.get_peers()
         return [peer for peer in peers if hexlify(peer.public_key.key_to_bin()) not in self.settings.crawlers]
 
+    def ping(self, peer):
+        self.logger.debug('Pinging peer %s', peer)
+
+        cache = self.request_cache.add(PingRequestCache(self, u'ping', peer))
+
+        global_time = self.claim_global_time()
+        auth = BinMemberAuthenticationPayload(self.my_peer.public_key.key_to_bin()).to_pack_list()
+        payload = PingPayload(cache.number).to_pack_list()
+        dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
+
+        packet = self._ez_pack(self._prefix, 15, [auth, dist, payload])
+        self.endpoint.send(peer.address, packet)
+
+        return cache.deferred
+
+    @lazy_wrapper(GlobalTimeDistributionPayload, PingPayload)
+    def on_ping_request(self, peer, dist, payload):
+        self.logger.debug('Got ping-request from %s', peer.address)
+
+        global_time = self.claim_global_time()
+        auth = BinMemberAuthenticationPayload(self.my_peer.public_key.key_to_bin()).to_pack_list()
+        payload = PingPayload(payload.identifier).to_pack_list()
+        dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
+
+        packet = self._ez_pack(self._prefix, 16, [auth, dist, payload])
+        self.endpoint.send(peer.address, packet)
+
+    @lazy_wrapper(GlobalTimeDistributionPayload, PingPayload)
+    def on_ping_response(self, peer, dist, payload):
+        if not self.request_cache.has(u'ping', payload.identifier):
+            self.logger.error('Got ping-response with unknown identifier, dropping packet')
+            return
+
+        self.logger.debug('Got ping-response from %s', peer.address)
+        cache = self.request_cache.pop(u'ping', payload.identifier)
+        cache.deferred.callback(None)
+
     def make_random_transfer(self):
         """
         Transfer funds to a random peer.
@@ -223,13 +262,16 @@ class NoodleCommunity(Community):
 
         rand_peer = random.choice(self.get_peers())
 
+        def on_ping_success(_):
+            self.transfer(rand_peer, 1).addCallbacks(on_success, on_fail)
+
         def on_success(_):
             self._logger.info("Successfully made transfer to peer!")
 
         def on_fail(failure):
             self._logger.info("Failed to make payment to peer: %s", str(failure))
 
-        self.transfer(rand_peer, 1).addCallbacks(on_success, on_fail)
+        self.ping(rand_peer).addCallbacks(on_ping_success, on_fail)
 
     def init_mem_db_flush(self, flush_time):
         if not self.mem_db_flush_lc:
