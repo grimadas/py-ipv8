@@ -39,10 +39,12 @@ def synchronized(f):
     """
     Due to database inconsistencies, we can't allow multiple threads to handle a received_half_block at the same time.
     """
+
     @wraps(f)
     def wrapper(self, *args, **kwargs):
         with self.receive_block_lock:
             return f(self, *args, **kwargs)
+
     return wrapper
 
 
@@ -52,6 +54,10 @@ class SubTrustCommunity(Community):
         self.master_peer = kwargs.pop('master_peer')
         self._prefix = b'\x00' + self.version + self.master_peer.mid
         super(SubTrustCommunity, self).__init__(*args, **kwargs)
+
+    # Virtual chain of the  sub community
+
+    # State of the chain
 
 
 class NoodleBlockListener(BlockListener):
@@ -99,8 +105,12 @@ class NoodleCommunity(Community):
         self.shutting_down = False
         self.listeners_map = {}  # Map of block_type -> [callbacks]
 
-        self.known_graph = nx.Graph()
         self.periodic_sync_lc = {}
+        # self.operation_queue = Queue()
+        # self.operation_queue_task
+
+        # TODO: revisit queues
+        # Block queues
         self.transfer_queue = Queue()
         self.transfer_queue_task = ensure_future(self.evaluate_transfer_queue())
         self.incoming_block_queue = Queue()
@@ -134,6 +144,7 @@ class NoodleCommunity(Community):
             chr(16): self.on_ping_response
         })
 
+        # TODO: remove
         # Add the listener
         self.add_listener(NoodleBlockListener(), [b'spend', b'claim'])
 
@@ -142,8 +153,7 @@ class NoodleCommunity(Community):
         self.persistence = NoodleMemoryDatabase(working_directory, db_name, orig_db)
 
         # Add the system minter(s)
-        for minter_pk in self.settings.minters:
-            self.known_graph.add_node(unhexlify(minter_pk), minter=True)
+        # TODO: remove system minter
 
         # If we are the system minter, init the community
         if hexlify(self.my_peer.public_key.key_to_bin()) in self.settings.minters or not self.settings.minters:
@@ -1555,7 +1565,37 @@ class NoodleCommunity(Community):
                                      introduction=None, extra_bytes=b''):
         extra_bytes = struct.pack('>l', self.get_chain_length())
         return super(NoodleCommunity, self).create_introduction_response(lan_socket_address, socket_address,
-                                                                             identifier, introduction, extra_bytes)
+                                                                         identifier, introduction, extra_bytes)
+
+    def subscribe_to_community(self, community_master_peer):
+        if hexlify(self.my_peer.public_key.key_to_bin()) in self.settings.crawlers:
+            self.logger.warning("I am a crawler - not joining subtrust communities")
+        elif not self.ipv8:
+            self.logger.error('No IPv8 service object available, cannot start SubTrustCommunity')
+        elif community_master_peer.mid not in self.pex:
+            self.logger.info("Joining community with mid %s", community_master_peer.mid)
+            community = SubTrustCommunity(self.my_peer, self.ipv8.endpoint, Network(),
+                                          master_peer=community_master_peer, max_peers=self.settings.max_peers_subtrust)
+
+            self.ipv8.overlays.append(community)
+            self.pex[community_master_peer.mid] = community
+
+            # Find other peers in the community
+            if self.bootstrap_master:
+                self.logger.info('Finding other peers with a bootstrap masters')
+                for k in self.bootstrap_master:
+                    community.walk_to(k)
+            else:
+                self.ipv8.strategies.append((RandomWalk(community), self.settings.max_peers_subtrust))
+
+            # Join the protocol audits
+            self.build_security_community(community_master_peer.mid)
+
+
+    # Community functions
+    def init_own_community(self, mid):
+        # self.pex[mid]
+        pass
 
     def build_security_community(self, community_mid):
         # Start sync task after the discovery
@@ -1593,27 +1633,6 @@ class NoodleCommunity(Community):
 
         if self.settings.crawler:
             self.crawl_chain(peer, latest_block_num=chain_length)
-
-    def form_subtrust_community(self, peer):
-        known_minters = set(nx.get_node_attributes(self.known_graph, 'minter').keys())
-        if hexlify(self.my_peer.public_key.key_to_bin()) in self.settings.crawlers:
-            self.logger.warning("I am a crawler - not forming subtrust community")
-        elif not self.ipv8:
-            self.logger.warning('No IPv8 service object available, cannot start SubTrustCommunity')
-        elif (peer.public_key.key_to_bin() in known_minters or not self.settings.minters) and peer.mid not in self.pex:
-            self.logger.info("Creating SubTrustCommunity around peer %s", peer)
-            community = SubTrustCommunity(self.my_peer, self.ipv8.endpoint, Network(),
-                                          master_peer=peer, max_peers=self.settings.max_peers_subtrust)
-            self.ipv8.overlays.append(community)
-            self.pex[peer.mid] = community
-
-            if self.bootstrap_master:
-                self.logger.info('Proceed with a bootstrap master')
-                for k in self.bootstrap_master:
-                    community.walk_to(k)
-            else:
-                self.ipv8.strategies.append((RandomWalk(community), self.settings.max_peers_subtrust))
-            self.build_security_community(peer.mid)
 
     async def unload(self):
         self.logger.debug("Unloading the Noodle Community.")
