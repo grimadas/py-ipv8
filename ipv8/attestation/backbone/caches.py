@@ -64,12 +64,12 @@ class ChainCrawlCache(IntroCrawlTimeout):
         return 120.0
 
 
-class HalfBlockSignCache(NumberCache):
+class BlockSignCache(NumberCache):
     """
     This request cache keeps track of outstanding half block signature requests.
     """
 
-    def __init__(self, community, half_block, sign_future, socket_address, timeouts=0, from_peer=None, seq_num=None):
+    def __init__(self, community, block, sign_future, socket_address, timeouts=0, from_peer=None, seq_num=None):
         """
         A cache to keep track of the signing of one of our blocks by a counterparty.
 
@@ -79,11 +79,11 @@ class HalfBlockSignCache(NumberCache):
         :param socket_address: the peer we sent the block to
         :param timeouts: the number of timeouts we have already had while waiting
         """
-        block_id_int = int(hexlify(half_block.block_id), 16) % 100000000
-        super(HalfBlockSignCache, self).__init__(community.request_cache, u"sign", block_id_int)
+        block_id_int = int(hexlify(block.block_id), 16) % 100000000
+        super(BlockSignCache, self).__init__(community.request_cache, u"sign", block_id_int)
         self.logger = logging.getLogger(self.__class__.__name__)
         self.community = community
-        self.half_block = half_block
+        self.half_block = block
         self.sign_future = sign_future
         self.socket_address = socket_address
         self.timeouts = timeouts
@@ -107,7 +107,7 @@ class HalfBlockSignCache(NumberCache):
             self.community.send_block(self.half_block, address=self.socket_address)
 
             async def add_later():
-                self.community.request_cache.add(HalfBlockSignCache(self.community, self.half_block, self.sign_future,
+                self.community.request_cache.add(BlockSignCache(self.community, self.half_block, self.sign_future,
                                                                     self.socket_address, self.timeouts + 1))
             self.community.request_cache.register_anonymous_task("add-later", add_later, delay=0.0)
         else:

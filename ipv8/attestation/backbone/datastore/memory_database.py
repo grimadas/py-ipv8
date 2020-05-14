@@ -34,20 +34,8 @@ class NoodleMemoryDatabase(object):
 
         self.logger = logging.getLogger(self.__class__.__name__)
 
-        self.double_spends = {}
         self.peer_map = {}
         self.do_commit = True
-
-        # TODO: remove graph from the noodle database
-        self.graph_path = os.path.join(self.working_directory, "work_graph.pickle")
-        if os.path.exists(self.graph_path):
-            self.work_graph = nx.read_gpickle(self.graph_path)
-        else:
-            self.work_graph = nx.DiGraph()
-        self.known_connections = nx.Graph()
-
-        self.claim_proofs = {}
-        self.nonces = {}
 
         self.block_time = {}
         self.block_file = None
@@ -119,46 +107,6 @@ class NoodleMemoryDatabase(object):
         # if self.original_db and self.do_commit:
         #    self.original_db.add_block(block)
 
-    def get_new_peer_nonce(self, peer_pk):
-        peer_id = key_to_id(peer_pk)
-        if peer_id not in self.nonces:
-            self.nonces[peer_id] = '1'
-        else:
-            self.nonces[peer_id] = str(int(self.nonces[peer_id]) + 1)
-        return self.nonces[peer_id]
-
-    def add_peer_proofs(self, peer_id, seq_num, status, proofs):
-        if peer_id not in self.claim_proofs or self.claim_proofs[peer_id][0] < seq_num:
-            self.claim_proofs[peer_id] = (seq_num, status, proofs)
-
-    def get_peer_proofs(self, peer_id, seq_num):
-        if peer_id not in self.claim_proofs or seq_num > self.claim_proofs[peer_id][0]:
-            return None
-        return self.claim_proofs[peer_id]
-
-    def get_last_seq_num(self, peer_id):
-        if peer_id not in self.claim_proofs:
-            return 0
-        else:
-            return self.claim_proofs[peer_id][0]
-
-    def dump_peer_status(self, peer_id, status):
-        if 'spends' not in status or 'claims' not in status:
-            # Status is ill-formed
-            return False
-
-        for (p, (val, seq_num)) in status['spends'].items():
-            self.update_spend(peer_id, p, float(val), int(seq_num))
-
-        for (p, (val, seq_num)) in status['claims'].items():
-            self.update_claim(p, peer_id, float(val), int(seq_num))
-
-        return True
-
-    def get_balance(self, peer_id, verified=True):
-        # Sum of claims(verified/or not) - Sum of spends(all known)
-        return self.get_total_claims(peer_id, only_verified=verified) - self.get_total_spends(peer_id)
-
     def remove_block(self, block):
         self.block_cache.pop((block.public_key, block.sequence_number), None)
         self.linked_block_cache.pop((block.link_public_key, block.link_sequence_number), None)
@@ -207,34 +155,6 @@ class NoodleMemoryDatabase(object):
 
         return blocks
 
-    def get_block_after(self, block, block_type=None):
-        # TODO for now we assume block_type is None
-        if (block.public_key, block.sequence_number + 1) in self.block_cache:
-            return self.block_cache[(block.public_key, block.sequence_number + 1)]
-        return None
-
-    def get_block_before(self, block, block_type=None):
-        # TODO for now we assume block_type is None
-        if (block.public_key, block.sequence_number - 1) in self.block_cache:
-            return self.block_cache[(block.public_key, block.sequence_number - 1)]
-        return None
-
-    def get_lowest_sequence_number_unknown(self, public_key):
-        if public_key not in self.latest_blocks:
-            return 1
-        latest_seq_num = self.latest_blocks[public_key].sequence_number
-        for ind in xrange(1, latest_seq_num + 2):
-            if (public_key, ind) not in self.block_cache:
-                return ind
-
-    def get_lowest_range_unknown(self, public_key):
-        lowest_unknown = self.get_lowest_sequence_number_unknown(public_key)
-        known_block_nums = [seq_num for pk, seq_num in self.block_cache.keys() if pk == public_key]
-        filtered_block_nums = [seq_num for seq_num in known_block_nums if seq_num > lowest_unknown]
-        if filtered_block_nums:
-            return lowest_unknown, filtered_block_nums[0] - 1
-        else:
-            return lowest_unknown, lowest_unknown
 
     def get_linked(self, block):
         if (block.link_public_key, block.link_sequence_number) in self.block_cache:

@@ -222,7 +222,7 @@ class NoodleCommunity(Community):
         if mode == SecurityMode.VANILLA:
             task = self.gossip_sync_task
         elif mode == SecurityMode.AUDIT:
-            #task = self.aud
+            # task = self.aud
             pass
 
         task = self.trustchain_sync \
@@ -236,8 +236,6 @@ class NoodleCommunity(Community):
     def gossip_sync_task(self, community_id):
         # get community frontiers
 
-
-
         # Get lastest info for the community
         blk = self.persistence.get_latest_peer_block_by_mid(community_id)
         val = self.pex[community_id].get_peers()
@@ -250,11 +248,9 @@ class NoodleCommunity(Community):
             if blk:
                 self.send_block_pair(blk[0], blk[1], address_set=val)
 
-
     def trustchain_sync(self, community_id):
         self.logger.info("Sync for the info peer with mid %s", hexlify(community_id))
         pass
-
 
     def transfer(self, dest_peer, spend_value):
         if self.get_my_balance() < spend_value and not self.settings.is_hiding:
