@@ -7,6 +7,7 @@ class SecurityMode(Enum):
     """
     VANILLA = 1
     AUDIT = 2
+    BOTH = 3
 
 
 class NoodleSettings(object):

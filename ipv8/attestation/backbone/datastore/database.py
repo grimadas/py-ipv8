@@ -4,9 +4,9 @@ This file contains everything related to persistence for TrustChain.
 import os
 from binascii import hexlify
 
-from .block import NoodleBlock
-from ...attestation.trustchain.blockcache import BlockCache
-from ...database import Database, database_blob
+from ipv8.attestation.backbone.block import NoodleBlock
+from ipv8.attestation.trustchain.blockcache import BlockCache
+from ipv8.database import Database, database_blob
 
 DATABASE_DIRECTORY = os.path.join(u"sqlite")
 

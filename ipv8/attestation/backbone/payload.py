@@ -1,6 +1,60 @@
 from ...messaging.payload import Payload
 
 
+class BlockPayload(Payload):
+    """
+    Payload for message that ships a signed block
+    """
+
+    format_list = ['varlenI', 'varlenI', '74s', 'I', 'varlenI', 'varlenI', '74s', 'I', '64s', 'Q']
+
+    def __init__(self, block_type, transaction, public_key, sequence_number,
+                 previous, links, com_id, com_seq_num, signature, timestamp):
+        super(BlockPayload, self).__init__()
+        self.type = block_type
+        self.transaction = transaction
+        self.public_key = public_key
+        self.sequence_number = sequence_number
+        self.previous = previous
+        self.links = links
+        self.com_id = com_id
+        self.com_seq_num = com_seq_num
+        self.signature = signature
+        self.timestamp = timestamp
+
+    @classmethod
+    def from_block(cls, block):
+        return BlockPayload(
+            block.type,
+            block._transaction,
+            block.public_key,
+            block.sequence_number,
+            block._previous,
+            block._links,
+            block.com_id,
+            block.com_seq_num,
+            block.signature,
+            block.timestamp)
+
+    def to_pack_list(self):
+        data = [('varlenI', self.type),
+                ('varlenI', self.transaction),
+                ('74s', self.public_key),
+                ('I', self.sequence_number),
+                ('varlenI', self.previous),
+                ('varlenI', self.links),
+                ('74s', self.com_id),
+                ('I', self.com_seq_num),
+                ('64s', self.signature),
+                ('Q', self.timestamp)]
+
+        return data
+
+    @classmethod
+    def from_unpack_list(cls, *args):
+        return BlockPayload(*args)
+
+
 class PingPayload(Payload):
     format_list = ['I']
 
@@ -223,58 +277,6 @@ class MintRequestPayload(Payload):
     @classmethod
     def from_unpack_list(cls, crawl_id):
         return MintRequestPayload(crawl_id)
-
-
-class HalfBlockPayload(Payload):
-    """
-    Payload for message that ships a half block
-    """
-
-    format_list = ['74s', 'I', '74s', 'I', '32s', '64s', 'varlenI', 'varlenI', 'Q']
-
-    def __init__(self, public_key, sequence_number, link_public_key, link_sequence_number, previous_hash,
-                 signature, block_type, transaction, timestamp):
-        super(HalfBlockPayload, self).__init__()
-        self.public_key = public_key
-        self.sequence_number = sequence_number
-        self.link_public_key = link_public_key
-        self.link_sequence_number = link_sequence_number
-        self.previous_hash = previous_hash
-        self.signature = signature
-        self.type = block_type
-        self.transaction = transaction
-        self.timestamp = timestamp
-
-    @classmethod
-    def from_half_block(cls, block):
-        return HalfBlockPayload(
-            block.public_key,
-            block.sequence_number,
-            block.link_public_key,
-            block.link_sequence_number,
-            block.previous_hash,
-            block.signature,
-            block.type,
-            block._transaction,
-            block.timestamp
-        )
-
-    def to_pack_list(self):
-        data = [('74s', self.public_key),
-                ('I', self.sequence_number),
-                ('74s', self.link_public_key),
-                ('I', self.link_sequence_number),
-                ('32s', self.previous_hash),
-                ('64s', self.signature),
-                ('varlenI', self.type),
-                ('varlenI', self.transaction),
-                ('Q', self.timestamp)]
-
-        return data
-
-    @classmethod
-    def from_unpack_list(cls, *args):
-        return HalfBlockPayload(*args)
 
 
 class HalfBlockBroadcastPayload(HalfBlockPayload):

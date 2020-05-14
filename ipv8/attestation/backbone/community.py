@@ -17,10 +17,10 @@ import orjson as json
 from .block import ANY_COUNTERPARTY_PK, EMPTY_PK, GENESIS_SEQ, NoodleBlock, UNKNOWN_SEQ, ValidationResult
 from .caches import AuditProofRequestCache, ChainCrawlCache, CrawlRequestCache, HalfBlockSignCache, IntroCrawlTimeout, \
     NoodleCrawlRequestCache, PingRequestCache, AuditRequestCache
-from .database import NoodleDB
+from ipv8.attestation.backbone.datastore.database import NoodleDB
 from .exceptions import InsufficientBalanceException, NoPathFoundException
 from .listener import BlockListener
-from .memory_database import NoodleMemoryDatabase
+from ipv8.attestation.backbone.datastore.memory_database import NoodleMemoryDatabase
 from .payload import *
 from .settings import SecurityMode, NoodleSettings
 from ...community import Community
@@ -54,6 +54,10 @@ class SubTrustCommunity(Community):
         self.master_peer = kwargs.pop('master_peer')
         self._prefix = b'\x00' + self.version + self.master_peer.mid
         super(SubTrustCommunity, self).__init__(*args, **kwargs)
+
+    def get_frontier(self):
+        # if log of one peer
+        pass
 
     # Virtual chain of the  sub community
 
@@ -164,6 +168,93 @@ class NoodleCommunity(Community):
             my_id = self.persistence.key_to_id(self.my_peer.public_key.key_to_bin())
             if self.persistence.get_balance(my_id) <= 0:
                 self.mint(self.settings.initial_mint_value)
+
+    # SubTrust Community routines ---
+
+    def subscribe_to_community(self, community_master_peer):
+        """
+        Subscribe to the community with the public key master peer.
+        Community is identified with a peer.mid.
+
+        If bootstrap_master is not specified will use RandomWalks to discover other peers for the same community.
+        Peer will be connect to maximum  `settings.max_peers_subtrust` peers.
+        """
+        if hexlify(self.my_peer.public_key.key_to_bin()) in self.settings.crawlers:
+            self.logger.warning("I am a crawler - not joining subtrust communities")
+        elif not self.ipv8:
+            self.logger.error('No IPv8 service object available, cannot start SubTrustCommunity')
+        elif community_master_peer.mid not in self.pex:
+            self.logger.info("Joining community with mid %s", community_master_peer.mid)
+            community = SubTrustCommunity(self.my_peer, self.ipv8.endpoint, Network(),
+                                          master_peer=community_master_peer, max_peers=self.settings.max_peers_subtrust)
+
+            self.ipv8.overlays.append(community)
+            self.pex[community_master_peer.mid] = community
+
+            # Find other peers in the community
+            if self.bootstrap_master:
+                self.logger.info('Finding other peers with a bootstrap masters')
+                for k in self.bootstrap_master:
+                    community.walk_to(k)
+            else:
+                self.ipv8.strategies.append((RandomWalk(community), self.settings.max_peers_subtrust))
+
+            # Join the protocol audits
+            self.join_community_gossip(community_master_peer.mid, self.settings.security_mode, self.settings.sync_time)
+
+    def join_community_gossip(self, community_mid, mode, sync_time):
+        """
+        Periodically exchange latest information in the community.
+        There are two possibilities:
+        1. Gossip protocol with a log reconciliation. [Integrity Violation Detection] SecurityMode.VANILLA
+            Latest transaction will be shared and compared with random peers in the community.
+            As other peers are repeating the same, this ensures that if information will be known by all peer eventually.
+            As all information is applied in a consistent way, an integrity violation will be detected.
+        2. Active auditing request with witnesses. [Probabilistic Violation Prevention] SecurityMode.AUDIT
+            If community requires prevention of certain violation that can be guaranteed with probability (1-epsilon).
+            Epsilon depends on multiple parameters, but the main one: fraction of malicious peers in the community.
+        Periodically gossip latest information to the community.
+        @param community_mid: master_peer_mid identification for community
+        @param mode: security mode to which join the community: see settings.SecurityMode
+        @param sync_time: interval in seconds to run the task
+        """
+        # Start sync task after the discovery
+        if mode == SecurityMode.VANILLA:
+            task = self.gossip_sync_task
+        elif mode == SecurityMode.AUDIT:
+            #task = self.aud
+            pass
+
+        task = self.trustchain_sync \
+            if mode == SecurityMode.VANILLA \
+            else self.trustchain_active_sync
+
+        self.periodic_sync_lc[community_mid] = self.register_task("sync_" + str(community_mid), task, community_mid,
+                                                                  delay=random.random(),
+                                                                  interval=sync_time)
+
+    def gossip_sync_task(self, community_id):
+        # get community frontiers
+
+
+
+        # Get lastest info for the community
+        blk = self.persistence.get_latest_peer_block_by_mid(community_id)
+        val = self.pex[community_id].get_peers()
+        if blk:
+            self.send_block(blk, address_set=val)
+        # Send also the last claim done with this peer
+        if community_id in self.persistence.peer_map:
+            blk = self.persistence.get_last_pairwise_block(self.persistence.peer_map[community_id],
+                                                           self.my_peer.public_key.key_to_bin())
+            if blk:
+                self.send_block_pair(blk[0], blk[1], address_set=val)
+
+
+    def trustchain_sync(self, community_id):
+        self.logger.info("Sync for the info peer with mid %s", hexlify(community_id))
+        pass
+
 
     def transfer(self, dest_peer, spend_value):
         if self.get_my_balance() < spend_value and not self.settings.is_hiding:
@@ -320,19 +411,6 @@ class NoodleCommunity(Community):
 
     def mem_db_flush(self):
         self.persistence.commit_block_times()
-
-    def trustchain_sync(self, community_id):
-        self.logger.info("Sync for the info peer with mid %s", hexlify(community_id))
-        blk = self.persistence.get_latest_peer_block_by_mid(community_id)
-        val = self.pex[community_id].get_peers()
-        if blk:
-            self.send_block(blk, address_set=val)
-        # Send also the last claim done with this peer
-        if community_id in self.persistence.peer_map:
-            blk = self.persistence.get_last_pairwise_block(self.persistence.peer_map[community_id],
-                                                           self.my_peer.public_key.key_to_bin())
-            if blk:
-                self.send_block_pair(blk[0], blk[1], address_set=val)
 
     def get_hop_to_peer(self, peer_pub_key):
         """
@@ -922,7 +1000,7 @@ class NoodleCommunity(Community):
         cache = self.request_cache.get(u"proof-request", crawl_id)
         if not cache:
             # Need to get more information from the peer to verify the claim
-            self.logger.info("Requesting the status and audit proofs %s:%d from peer %s:%d",
+            self.logger.info("Requesting the status and audit] proofs %s:%d from peer %s:%d",
                              crawl_id, spend_block.sequence_number, peer.address[0], peer.address[1])
             except_pack = json.dumps(list())
             if self.settings.security_mode == SecurityMode.VANILLA:
@@ -1566,53 +1644,6 @@ class NoodleCommunity(Community):
         extra_bytes = struct.pack('>l', self.get_chain_length())
         return super(NoodleCommunity, self).create_introduction_response(lan_socket_address, socket_address,
                                                                          identifier, introduction, extra_bytes)
-
-    def subscribe_to_community(self, community_master_peer):
-        if hexlify(self.my_peer.public_key.key_to_bin()) in self.settings.crawlers:
-            self.logger.warning("I am a crawler - not joining subtrust communities")
-        elif not self.ipv8:
-            self.logger.error('No IPv8 service object available, cannot start SubTrustCommunity')
-        elif community_master_peer.mid not in self.pex:
-            self.logger.info("Joining community with mid %s", community_master_peer.mid)
-            community = SubTrustCommunity(self.my_peer, self.ipv8.endpoint, Network(),
-                                          master_peer=community_master_peer, max_peers=self.settings.max_peers_subtrust)
-
-            self.ipv8.overlays.append(community)
-            self.pex[community_master_peer.mid] = community
-
-            # Find other peers in the community
-            if self.bootstrap_master:
-                self.logger.info('Finding other peers with a bootstrap masters')
-                for k in self.bootstrap_master:
-                    community.walk_to(k)
-            else:
-                self.ipv8.strategies.append((RandomWalk(community), self.settings.max_peers_subtrust))
-
-            # Join the protocol audits
-            self.build_security_community(community_master_peer.mid)
-
-
-    # Community functions
-    def init_own_community(self, mid):
-        # self.pex[mid]
-        pass
-
-    def build_security_community(self, community_mid):
-        # Start sync task after the discovery
-        task = self.trustchain_sync \
-            if self.settings.security_mode == SecurityMode.VANILLA \
-            else self.trustchain_active_sync
-
-        self.periodic_sync_lc[community_mid] = self.register_task("sync_" + str(community_mid), task, community_mid,
-                                                                  delay=random.random(),
-                                                                  interval=self.settings.sync_time)
-
-    def init_minter_community(self):
-        if self.my_peer.mid not in self.pex and hexlify(
-                self.my_peer.public_key.key_to_bin()) not in self.settings.crawlers:
-            self.logger.info('Creating own minter community')
-            self.pex[self.my_peer.mid] = self
-            self.build_security_community(self.my_peer.mid)
 
     @synchronized
     def introduction_response_callback(self, peer, dist, payload):
