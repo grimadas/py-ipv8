@@ -60,7 +60,7 @@ class BlockBroadcastPayload(BlockPayload):
     Payload for a message that contains a half block and a TTL field for broadcasts.
     """
 
-    format_list = ['74s', 'I', '74s', 'I', '32s', '64s', 'varlenI', 'varlenI', 'Q', 'I']
+    format_list = ['varlenI', 'varlenI', '74s', 'I', 'varlenI', 'varlenI', '74s', 'I', '64s', 'Q', 'I']
 
     def __init__(self, *args, ttl=1):
         super(BlockBroadcastPayload, self).__init__(*args)
@@ -90,6 +90,22 @@ class BlockBroadcastPayload(BlockPayload):
     @classmethod
     def from_unpack_list(cls, *args):
         return BlockBroadcastPayload(*args)
+
+
+class FrontierPayload(Payload):
+    format_list = ['74s', 'varlenI']
+
+    def __init__(self, id, frontier):
+        super().__init__(self)
+        self.id = id
+        self.frontier = frontier
+
+    def to_pack_list(self):
+        return [('74s', self.id), ('varlenI', self.frontier)]
+
+    @classmethod
+    def from_unpack_list(cls, id, frontier):
+        return FrontierPayload(id, frontier)
 
 
 class PingPayload(Payload):
@@ -355,4 +371,3 @@ class CrawlResponsePayload(Payload):
     @classmethod
     def from_unpack_list(cls, *args):
         return CrawlResponsePayload(*args)
-

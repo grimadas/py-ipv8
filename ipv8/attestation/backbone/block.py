@@ -6,7 +6,7 @@ from hashlib import sha256
 
 import orjson as json
 
-from .datastore.utils import decode_links, encode_links
+from .datastore.utils import decode_links, encode_links, key_to_id
 from .payload import BlockPayload
 from ...database import database_blob
 from ...keyvault.crypto import default_eccrypto
@@ -70,7 +70,7 @@ class NoodleBlock(object):
             self.public_key = EMPTY_PK
             self.sequence_number = GENESIS_SEQ  # sequence number related to the personal chain
             # previous hash in the identity chain
-            self.previous = {(0, GENESIS_HASH)}
+            self.previous = {(GENESIS_SEQ-1, key_to_id(GENESIS_HASH))}
             self._previous = json.dumps(decode_links(self.previous))
 
             # Linked blocks => links to the block in other chains
@@ -78,7 +78,7 @@ class NoodleBlock(object):
             self._links = json.dumps([])
             # Metadata for community identifiers
             self.com_id = EMPTY_PK
-            self.com_seq_num = GENESIS_SEQ
+            self.com_seq_num = 0
 
             self.signature = EMPTY_SIG
             self.timestamp = int(time.time() * 1000)
@@ -90,8 +90,8 @@ class NoodleBlock(object):
             self._links = data[5] if isinstance(data[5], bytes) else bytes(data[5])
 
             self.transaction = json.loads(self._transaction)
-            self.previous = json.loads(encode_links(self._previous))
-            self.links = json.loads(encode_links(self._links))
+            self.previous = encode_links(json.loads(self._previous))
+            self.links = encode_links(json.loads(self._links))
 
             self.type, self.public_key, self.sequence_number = data[0], data[2], data[3]
             self.com_id, self.com_seq_num = data[6], data[7]
@@ -208,20 +208,16 @@ class NoodleBlock(object):
 
         linked = None
         link_seq_num = 0
-        link_com_id = EMPTY_PK
 
         if com_id:
             # There is community specified => will base block on the latest known information
-            frontier = database.get_latest_community_frontier(com_id)
-
-            if frontier:
-                linked = frontier['v']
-                link_seq_num = max(frontier['v'])[0]
-        elif links:
-            # Take community id, sequence number from links if available
-            # Get blocks by links
-            # TODO: add
-            pass
+            if links:
+                linked = links
+                link_seq_num = max(links)[0]
+            else:
+                frontier = database.get_latest_community_frontier(com_id)
+                linked = frontier['v'] if frontier else set()
+                link_seq_num = max(frontier['v'])[0] if frontier else 0
 
         if prevs:
             ret.previous = prevs
@@ -262,9 +258,9 @@ class NoodleBlock(object):
             if key == 'transaction':
                 yield key, json.loads(self._transaction)
             elif key == 'links':
-                yield key, json.loads(encode_links(self._links))
+                yield key, encode_links(json.loads(self._links))
             elif key == 'previous':
-                yield key, json.loads(encode_links(self._previous))
+                yield key, encode_links(json.loads(self._previous))
             elif isinstance(value, bytes) and key != "insert_time" and key != "type":
                 yield key, hexlify(value).decode('utf-8')
             else:

@@ -10,17 +10,16 @@ from collections import deque
 from functools import wraps
 from threading import RLock
 
-import networkx as nx
-
 import orjson as json
 
-from .block import ANY_COUNTERPARTY_PK, EMPTY_PK, GENESIS_SEQ, NoodleBlock, UNKNOWN_SEQ, ValidationResult
-from .caches import AuditProofRequestCache, ChainCrawlCache, CrawlRequestCache, HalfBlockSignCache, IntroCrawlTimeout, \
-    NoodleCrawlRequestCache, PingRequestCache, AuditRequestCache
 from ipv8.attestation.backbone.datastore.database import NoodleDB
-from .exceptions import InsufficientBalanceException, NoPathFoundException
-from .listener import BlockListener
 from ipv8.attestation.backbone.datastore.memory_database import NoodleMemoryDatabase
+from .block import ANY_COUNTERPARTY_PK, EMPTY_PK, GENESIS_SEQ, NoodleBlock, UNKNOWN_SEQ
+from .caches import AuditProofRequestCache, ChainCrawlCache, CrawlRequestCache, IntroCrawlTimeout, \
+    NoodleCrawlRequestCache, PingRequestCache, AuditRequestCache
+from .consts import FRONTIER_MSG
+from .datastore.utils import decode_frontier
+from .listener import BlockListener
 from .payload import *
 from .settings import SecurityMode, NoodleSettings
 from ...community import Community
@@ -32,7 +31,7 @@ from ...peerdiscovery.discovery import RandomWalk
 from ...peerdiscovery.network import Network
 from ...requestcache import RandomNumberCache, RequestCache
 from ...taskmanager import task
-from ...util import fail, maybe_coroutine, succeed
+from ...util import maybe_coroutine, succeed
 
 
 def synchronized(f):
@@ -54,15 +53,6 @@ class SubTrustCommunity(Community):
         self.master_peer = kwargs.pop('master_peer')
         self._prefix = b'\x00' + self.version + self.master_peer.mid
         super(SubTrustCommunity, self).__init__(*args, **kwargs)
-
-    def get_frontier(self):
-        # if log of one peer
-        pass
-
-    # Virtual chain of the  sub community
-
-    # State of the chain
-
 
 class NoodleBlockListener(BlockListener):
     """
@@ -145,7 +135,8 @@ class NoodleCommunity(Community):
             chr(13): self.received_mint_request,
             chr(14): self.received_audit_proofs_response,
             chr(15): self.on_ping_request,
-            chr(16): self.on_ping_response
+            chr(16): self.on_ping_response,
+            chr(FRONTIER_MSG): self.received_frontier
         })
 
         # TODO: remove
@@ -169,7 +160,7 @@ class NoodleCommunity(Community):
             if self.persistence.get_balance(my_id) <= 0:
                 self.mint(self.settings.initial_mint_value)
 
-    # SubTrust Community routines ---
+    # ----- SubTrust Community routines ------
 
     def subscribe_to_community(self, community_master_peer):
         """
@@ -224,8 +215,7 @@ class NoodleCommunity(Community):
         elif mode == SecurityMode.AUDIT:
             # task = self.aud
             pass
-
-        task = self.trustchain_sync \
+        task = self.gossip_sync_task \
             if mode == SecurityMode.VANILLA \
             else self.trustchain_active_sync
 
@@ -234,75 +224,38 @@ class NoodleCommunity(Community):
                                                                   interval=sync_time)
 
     def gossip_sync_task(self, community_id):
-        # get community frontiers
+        frontier = self.persistence.get_frontier(community_id)
+        if frontier:
+            peer_set = self.pex[community_id].get_peers()
+            self.send_frontier(community_id, frontier, peer_set)
 
-        # Get lastest info for the community
-        blk = self.persistence.get_latest_peer_block_by_mid(community_id)
-        val = self.pex[community_id].get_peers()
-        if blk:
-            self.send_block(blk, address_set=val)
-        # Send also the last claim done with this peer
-        if community_id in self.persistence.peer_map:
-            blk = self.persistence.get_last_pairwise_block(self.persistence.peer_map[community_id],
-                                                           self.my_peer.public_key.key_to_bin())
-            if blk:
-                self.send_block_pair(blk[0], blk[1], address_set=val)
+    def send_frontier(self, id, frontier, peers):
+        global_time = self.claim_global_time()
+        dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
 
-    def trustchain_sync(self, community_id):
+        self.logger.debug("Gossiping frontier (%s)", frontier)
+
+        serialized = json.dumps(decode_frontier(frontier))
+
+        payload = FrontierPayload(id, serialized)
+        packet = self._ez_pack(self._prefix, FRONTIER_MSG, [dist, payload], False)
+
+        for p in peers:
+            self.endpoint.send(p, packet)
+
+    @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, FrontierPayload)
+    def received_frontier(self, source_address, dist, payload: FrontierPayload):
+        frontier = json.loads(decode_frontier(payload.frontier))
+        # process frontiers => reconcilate
+
+        block = self.get_block_class(payload.type).from_payload(payload, self.serializer)
+        peer = Peer(payload.public_key, source_address)
+        self.validate_persist_block(block, peer)
+
+
+def trustchain_sync(self, community_id):
         self.logger.info("Sync for the info peer with mid %s", hexlify(community_id))
         pass
-
-    def transfer(self, dest_peer, spend_value):
-        if self.get_my_balance() < spend_value and not self.settings.is_hiding:
-            return fail(InsufficientBalanceException("Insufficient balance."))
-
-        future = Future()
-        self.transfer_queue.put_nowait((future, dest_peer, spend_value))
-        return future
-
-    async def process_transfer_queue_item(self, future, dest_peer, spend_value):
-        self._logger.debug("Making spend to peer %s (value: %f)", dest_peer, spend_value)
-        if dest_peer == self.my_peer:
-            # We are transferring something to ourselves
-            my_pk = self.my_peer.public_key.key_to_bin()
-            my_id = self.persistence.key_to_id(my_pk)
-            peer_id = self.persistence.key_to_id(self.my_peer.public_key.key_to_bin())
-            pw_total = self.persistence.get_total_pairwise_spends(my_id, peer_id)
-            tx = {"value": spend_value, "total_spend": pw_total + spend_value}
-
-            block_tup = await self.sign_block(self.my_peer, self.my_peer.public_key.key_to_bin(),
-                                              block_type=b'spend', transaction=tx)
-            block_tup = await self.sign_block(self.my_peer, self.my_peer.public_key.key_to_bin(), block_type=b'claim',
-                                              linked=block_tup[0])
-            future.set_result(block_tup)
-        else:
-            try:
-                next_hop_peer, tx = self.prepare_spend_transaction(dest_peer.public_key.key_to_bin(), spend_value)
-                if next_hop_peer != dest_peer:
-                    # Multi-hop payment, add condition + nonce
-                    nonce = self.persistence.get_new_peer_nonce(dest_peer.public_key.key_to_bin())
-                    condition = hexlify(dest_peer.public_key.key_to_bin()).decode()
-                    tx.update({'nonce': nonce, 'condition': condition})
-
-                result = await self.sign_block(next_hop_peer, next_hop_peer.public_key.key_to_bin(),
-                                               block_type=b'spend', transaction=tx)
-                future.set_result(result)
-            except Exception as exc:
-                future.set_exception(exc)
-
-    async def evaluate_transfer_queue(self):
-        while True:
-            block_info = await self.transfer_queue.get()
-            future, dest_peer, spend_value = block_info
-            _ = ensure_future(self.process_transfer_queue_item(future, dest_peer, spend_value))
-            await sleep(self.settings.transfer_queue_interval / 1000)
-
-    def start_making_random_transfers(self):
-        """
-        Start to make random transfers to other peers.
-        """
-        self.transfer_lc = self.register_task("transfer_lc", self.make_random_transfer,
-                                              interval=self.settings.transfer_interval)
 
     def get_peer(self, pub_key):
         for peer in self.get_peers():
@@ -310,40 +263,7 @@ class NoodleCommunity(Community):
                 return peer
         return None
 
-    def ask_minters_for_funds(self, value=10000):
-        """
-        Ask the minters for funds.
-        """
-        self._logger.info("Asking minters for funds (%d)", value)
-        known_minters = set(nx.get_node_attributes(self.known_graph, 'minter').keys())
-        requests_sent = 0
-        for minter in known_minters:
-            minter_peer = self.get_peer(minter)
-            if not minter_peer:
-                continue
-
-            global_time = self.claim_global_time()
-            auth = BinMemberAuthenticationPayload(self.my_peer.public_key.key_to_bin()).to_pack_list()
-            payload = MintRequestPayload(value).to_pack_list()
-            dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
-
-            packet = self._ez_pack(self._prefix, 13, [auth, dist, payload])
-            self._logger.info("Sending mint request to peer %s:%d", *minter_peer.address)
-            self.endpoint.send(minter_peer.address, packet)
-            requests_sent += 1
-
-        if requests_sent == 0:
-            self._logger.info("No minters available!")
-
-    def get_my_balance(self):
-        my_pk = self.my_peer.public_key.key_to_bin()
-        my_id = self.persistence.key_to_id(my_pk)
-        return self.persistence.get_balance(my_id)
-
-    def get_eligible_payment_peers(self):
-        peers = self.get_peers()
-        return [peer for peer in peers if hexlify(peer.public_key.key_to_bin()) not in self.settings.crawlers]
-
+    # -------- Ping Functions -------------
     async def ping(self, peer):
         self.logger.debug('Pinging peer %s', peer)
 
@@ -381,101 +301,12 @@ class NoodleCommunity(Community):
         cache = self.request_cache.pop(u'ping', payload.identifier)
         cache.future.set_result(None)
 
-    async def make_random_transfer(self):
-        """
-        Transfer funds to a random peer.
-        """
-        if self.get_my_balance() <= 0:
-            self.mint()
-            return
-
-        if not self.get_eligible_payment_peers():
-            self._logger.info("No peers to make a payment to.")
-            return
-
-        rand_peer = random.choice(self.get_peers())
-
-        try:
-            await self.ping(rand_peer)
-            await self.transfer(rand_peer, 1)
-        except RuntimeError as exc:
-            self._logger.info("Failed to make payment to peer: %s", str(exc))
-
     def init_mem_db_flush(self, flush_time):
         if not self.mem_db_flush_lc:
             self.mem_db_flush_lc = self.register_task("mem_db_flush", self.mem_db_flush, flush_time)
 
     def mem_db_flush(self):
         self.persistence.commit_block_times()
-
-    def get_hop_to_peer(self, peer_pub_key):
-        """
-        Get next hop to peer
-        :param peer_pub_key: public key of the destination
-        :return: the next hop for the peer
-        """
-        p = self.get_peer_by_pub_key(peer_pub_key)
-        if p:
-            # Directly connected
-            return p
-        # Check if peer is part of any known community
-        for p in self.get_all_communities_peers():
-            if peer_pub_key == p.public_key.key_to_bin():
-                self.logger.info("Choosing peer from community")
-                return p
-        # Look in the known_graph the path to the peer
-        if peer_pub_key not in self.known_graph:
-            self.logger.error("Target peer is not in known graph")
-            return None
-        else:
-            source = self.my_peer.public_key.key_to_bin()
-            target = peer_pub_key
-            p = None
-            while not p and len(self.known_graph[source]) > 0:
-                paths = list(nx.all_shortest_paths(self.known_graph, source=source, target=target))
-                random_path = random.choice(paths)
-                if len(random_path) < 2:
-                    self.logger.error("Path to key %s is less than 2 %s", peer_pub_key, str(random_path))
-                else:
-                    # Choose random path
-                    p = self.get_peer_by_pub_key(random_path[1])
-                    if not p:
-                        # p is not connected !
-                        self.logger.error("Got a path, but not connected! %s. Removing the edge ", random_path[1])
-                        self.known_graph.remove_edge(source, random_path[1])
-            return p
-
-    def mint(self, value=None):
-        self._logger.info("Minting initial value...")
-        if not value:
-            value = self.settings.initial_mint_value
-        mint = self.prepare_mint_transaction(value)
-        return self.self_sign_block(block_type=b'claim', transaction=mint)
-
-    def prepare_spend_transaction(self, pub_key, spend_value, **kwargs):
-        """
-        Prepare a spend transaction.
-        First check your own balance. Next, find a path to the target peer.
-        """
-        my_pk = self.my_peer.public_key.key_to_bin()
-        my_id = self.persistence.key_to_id(my_pk)
-
-        peer = self.get_hop_to_peer(pub_key)
-        if not peer:
-            raise NoPathFoundException("No path to target peer found.")
-        peer_id = self.persistence.key_to_id(peer.public_key.key_to_bin())
-        pw_total = self.persistence.get_total_pairwise_spends(my_id, peer_id)
-        added = {"value": spend_value, "total_spend": pw_total + spend_value}
-        added.update(**kwargs)
-        return peer, added
-
-    def prepare_mint_transaction(self, value):
-        minter = self.persistence.key_to_id(EMPTY_PK)
-        pk = self.my_peer.public_key.key_to_bin()
-        my_id = self.persistence.key_to_id(pk)
-        total = self.persistence.get_total_pairwise_spends(minter, my_id)
-        transaction = {"value": value, "mint_proof": True, "total_spend": total + value}
-        return transaction
 
     def do_db_cleanup(self):
         """
@@ -534,61 +365,6 @@ class NoodleCommunity(Community):
             to_remove = self.relayed_broadcasts_order.popleft()
             self.relayed_broadcasts.remove(to_remove)
 
-    async def informed_send_block(self, block1, block2=None, ttl=None, fanout=None):
-        """
-        Spread block among your verified peers.
-        """
-        global_time = self.claim_global_time()
-        dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
-        if block2:
-            if block1.link_sequence_number == UNKNOWN_SEQ:
-                block = block1
-            else:
-                block = block2
-        else:
-            block = block1
-        # Get information about the block counterparties
-        if not ttl:
-            ttl = self.settings.ttl
-        know_neigh = self.network.known_network.get_neighbours(block.public_key)
-        if not know_neigh:
-            # No neighbours known, spread randomly
-            if block2:
-                self.send_block_pair(block1, block2, ttl=ttl)
-            else:
-                self.send_block(block1, ttl=ttl)
-        else:
-            next_peers = set()
-            for neigh in know_neigh:
-                paths = self.network.known_network.get_path_to_peer(self.my_peer.public_key.key_to_bin(), neigh,
-                                                                    cutoff=ttl + 1)
-                for p in paths:
-                    next_peers.add(p[1])
-            res_fanout = fanout if fanout else self.settings.broadcast_fanout
-            if len(next_peers) < res_fanout:
-                # There is not enough information to build paths - choose at random
-                for peer in random.sample(self.get_peers(), min(len(self.get_peers()),
-                                                                res_fanout)):
-                    next_peers.add(peer.public_key.key_to_bin())
-            if len(next_peers) > res_fanout:
-                next_peers = random.sample(list(next_peers), res_fanout)
-
-            if block2:
-                payload = HalfBlockPairBroadcastPayload.from_half_blocks(block1, block2, ttl).to_pack_list()
-                packet = self._ez_pack(self._prefix, 6, [dist, payload], False)
-            else:
-                payload = HalfBlockBroadcastPayload.from_half_block(block, ttl).to_pack_list()
-                packet = self._ez_pack(self._prefix, 5, [dist, payload], False)
-
-            for peer_key in next_peers:
-                peer = self.network.get_verified_by_public_key_bin(peer_key)
-                self.logger.debug("Sending block to %s", peer)
-                p = peer.address
-                await sleep(random.random() * 0.1)
-                self.endpoint.send(p, packet)
-
-            self._add_broadcasted_blockid(block.block_id)
-
     def send_block(self, block, address=None, address_set=None, ttl=1):
         """
         Send a block to a specific address, or do a broadcast to known peers if no peer is specified.
@@ -600,12 +376,12 @@ class NoodleCommunity(Community):
 
         if address:
             self.logger.debug("Sending block to (%s:%d) (%s)", address[0], address[1], block)
-            payload = HalfBlockPayload.from_half_block(block).to_pack_list()
+            payload = BlockPayload.from_half_block(block).to_pack_list()
             packet = self._ez_pack(self._prefix, 1, [dist, payload], False)
             self.endpoint.send(address, packet)
         else:
             self.logger.debug("Broadcasting block %s", block)
-            payload = HalfBlockBroadcastPayload.from_half_block(block, ttl).to_pack_list()
+            payload = BlockBroadcastPayload.from_half_block(block, ttl).to_pack_list()
             packet = self._ez_pack(self._prefix, 5, [dist, payload], False)
 
             if address_set:
@@ -618,70 +394,10 @@ class NoodleCommunity(Community):
                 peers = (p.address for p in random.sample(self.get_peers(), f))
             for p in peers:
                 self.endpoint.send(p, packet)
-                # self.register_anonymous_task("send_block",
-                #                             reactor.callLater(random.random() * 0.2, self.endpoint.send, p, packet))
-
             self._add_broadcasted_blockid(block.block_id)
-
-    def send_block_pair(self, block1, block2, address=None, address_set=None, ttl=1):
-        """
-        Send a half block pair to a specific address, or do a broadcast to known peers if no peer is specified.
-        """
-        global_time = self.claim_global_time()
-        dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
-
-        if address:
-            self.logger.info("Sending block pair to (%s:%d) (%s and %s)", address[0], address[1], block1, block2)
-            payload = HalfBlockPairPayload.from_half_blocks(block1, block2).to_pack_list()
-            packet = self._ez_pack(self._prefix, 4, [dist, payload], False)
-            self.endpoint.send(address, packet)
-        else:
-            payload = HalfBlockPairBroadcastPayload.from_half_blocks(block1, block2, ttl).to_pack_list()
-            packet = self._ez_pack(self._prefix, 6, [dist, payload], False)
-            if address_set:
-                f = min(len(address_set), self.settings.broadcast_fanout)
-                self.logger.debug("Broadcasting block pair in a back-channel  to %s peers", f)
-                peers = (p.address for p in random.sample(address_set, f))
-            else:
-                f = min(len(self.get_peers()), self.settings.broadcast_fanout)
-                self.logger.debug("Broadcasting block pair in a main-channel  to %s peers", f)
-                peers = (p.address for p in random.sample(self.get_peers(), f))
-
-            for p in peers:
-                self.endpoint.send(p, packet)
-                # self.register_anonymous_task("send_block_pair",
-                #                             reactor.callLater(random.random() * 0.2, self.endpoint.send, p, packet))
-
-            self._add_broadcasted_blockid(block1.block_id)
 
     def self_sign_block(self, block_type=b'unknown', transaction=None):
         return self.sign_block(self.my_peer, block_type=block_type, transaction=transaction)
-
-    def create_source_block(self, block_type=b'unknown', transaction=None):
-        """
-        Create a source block without any initial counterparty to sign.
-
-        :param block_type: The type of the block to be constructed, as a string
-        :param transaction: A string describing the interaction in this block
-        :return: A future that fires with a (block, None) tuple
-        """
-        return self.sign_block(peer=None, public_key=ANY_COUNTERPARTY_PK,
-                               block_type=block_type, transaction=transaction)
-
-    def create_link(self, source, block_type, additional_info=None, public_key=None):
-        """
-        Create a Link Block to a source block
-
-        :param source: The source block which had no initial counterpary to sign
-        :param block_type: The type of the block to be constructed, as a string
-        :param additional_info: a dictionary with supplementary information concerning the transaction
-        :param public_key: The public key of the counterparty (usually of the source's owner)
-        :return: None
-        """
-        public_key = source.public_key if public_key is None else public_key
-
-        return self.sign_block(self.my_peer, linked=source, public_key=public_key, block_type=block_type,
-                               additional_info=additional_info)
 
     @synchronized
     def sign_block(self, peer, public_key=EMPTY_PK, block_type=b'unknown', transaction=None, linked=None,
@@ -771,8 +487,8 @@ class NoodleCommunity(Community):
             # self.send_block_pair(linked, block)
             return succeed((linked, block))
 
-    @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, HalfBlockPayload)
-    async def received_half_block(self, source_address, dist, payload):
+    @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, BlockPayload)
+    async def received_block(self, source_address, dist, payload):
         """
         We've received a half block, either because we sent a SIGNED message to some one or we are crawling
         """
@@ -789,7 +505,7 @@ class NoodleCommunity(Community):
             await sleep(self.settings.block_queue_interval / 1000)
 
     @synchronized
-    @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, HalfBlockBroadcastPayload)
+    @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, BlockBroadcastPayload)
     def received_half_block_broadcast(self, source_address, dist, payload):
         """
         We received a half block, part of a broadcast. Disseminate it further.
@@ -804,36 +520,6 @@ class NoodleCommunity(Community):
                 self.informed_send_block(block, ttl=payload.ttl, fanout=fanout)
             else:
                 self.send_block(block, ttl=payload.ttl)
-
-    @synchronized
-    @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, HalfBlockPairPayload)
-    def received_half_block_pair(self, source_address, dist, payload):
-        """
-        We received a block pair message.
-        """
-        block1, block2 = self.get_block_class(payload.type1).from_pair_payload(payload, self.serializer)
-        self.logger.info("Received block pair %s, %s", block1, block2)
-        peer = Peer(payload.public_key, source_address)
-        self.validate_persist_block(block1, peer)
-        self.validate_persist_block(block2, peer)
-
-    @synchronized
-    @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, HalfBlockPairBroadcastPayload)
-    async def received_half_block_pair_broadcast(self, source_address, dist, payload):
-        """
-        We received a half block pair, part of a broadcast. Disseminate it further.
-        """
-        block1, block2 = self.get_block_class(payload.type1).from_pair_payload(payload, self.serializer)
-        self.validate_persist_block(block1)
-        self.validate_persist_block(block2)
-
-        if block1.block_id not in self.relayed_broadcasts and payload.ttl > 1:
-            if self.settings.use_informed_broadcast:
-                fanout = self.settings.broadcast_fanout - 1
-                self.informed_send_block(block1, block2, ttl=payload.ttl, fanout=fanout)
-            else:
-                await sleep(0.5 * random.random())
-                self.send_block_pair(block1, block2, ttl=payload.ttl)
 
     def check_local_state_wrt_block(self, block):
         if block.type == b'spend':

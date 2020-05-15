@@ -7,7 +7,7 @@ from hashlib import sha1
 
 from six.moves import xrange
 
-from ipv8.attestation.backbone.block import NoodleBlock, GENESIS_HASH, GENESIS_SEQ
+from ipv8.attestation.backbone.block import NoodleBlock, GENESIS_HASH, GENESIS_SEQ, EMPTY_PK
 from ipv8.attestation.backbone.datastore.consistency import Chain
 from ipv8.attestation.backbone.datastore.utils import key_to_id
 
@@ -51,6 +51,25 @@ class NoodleMemoryDatabase(object):
                 self.add_block(block)
                 peer_mid = sha1(block.public_key).digest()
                 self.peer_map[peer_mid] = block.public_key
+                
+    def get_frontier(self, chain_id):
+        val = self.get_peer_frontier(chain_id)
+        return val if val else self.get_community_frontier(chain_id)
+
+    def get_community_frontier(self, com_id):
+        if com_id in self.community_chains:
+            return self.community_chains[com_id].frontier
+        return None
+ 
+    def get_peer_frontier(self, peer_id):
+        if peer_id in self.identity_chains:
+            return self.identity_chains[peer_id].frontier
+        return None
+
+    def get_blocks_by_links(self, links):
+        pass
+        #for s,h in links:
+
 
     def get_latest_peer_block_by_mid(self, peer_mid):
         if peer_mid in self.peer_map:
@@ -89,7 +108,6 @@ class NoodleMemoryDatabase(object):
             self.block_time[block.public_key] = dict()
 
             self.short_map[key_to_id(block.public_key)] = block.public_key
-
             # Initialize identity chain
             self.identity_chains[block.public_key] = Chain()
         block_id = block.sequence_number
@@ -97,8 +115,13 @@ class NoodleMemoryDatabase(object):
             self.block_cache[block.public_key][block_id] = {block.hash: block}
         if key_to_id(block.hash) not in self.short_map:
             self.short_map[key_to_id(block.hash)] = block.hash
+        self.identity_chains[block.public_key].add_block(block)
 
-        self.linked_block_cache[(block.link_public_key, block.link_sequence_number)] = block
+        # Add to community chain
+        if block.com_id != EMPTY_PK:
+            if block.com_id not in self.community_chains:
+                self.community_chains[block.com_id] = Chain(personal=False)
+            self.community_chains[block.com_id].add_block(block)
 
         # time when block is received by peer
         self.block_time[block.public_key][block_id] = int(round(time.time() * 1000))
