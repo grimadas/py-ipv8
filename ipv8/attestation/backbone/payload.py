@@ -92,20 +92,32 @@ class BlockBroadcastPayload(BlockPayload):
         return BlockBroadcastPayload(*args)
 
 
-class FrontierPayload(Payload):
-    format_list = ['74s', 'varlenI']
+class KVPayload(Payload):
+    format_list = ['varlenH', 'varlenI']
 
-    def __init__(self, id, frontier):
-        super().__init__(self)
-        self.id = id
-        self.frontier = frontier
+    def __init__(self, key, value):
+        Payload.__init__(self)
+        self.key = id
+        self.value = value
 
     def to_pack_list(self):
-        return [('74s', self.id), ('varlenI', self.frontier)]
+        return [('varlenH', self.key), ('varlenI', self.value)]
 
     @classmethod
-    def from_unpack_list(cls, id, frontier):
-        return FrontierPayload(id, frontier)
+    def from_unpack_list(cls, key, value):
+        return KVPayload(key, value)
+
+
+class FrontierPayload(KVPayload):
+    pass
+
+
+class BlocksRequestPayload(KVPayload):
+    pass
+
+
+class BlockResponsePayload(KVPayload):
+    pass
 
 
 class PingPayload(Payload):
@@ -121,58 +133,6 @@ class PingPayload(Payload):
     @classmethod
     def from_unpack_list(cls, identifier):
         return PingPayload(identifier)
-
-
-class CrawlRequestPayload(Payload):
-    """
-    Request a crawl of blocks starting with a specific sequence number or the first if 0.
-    """
-
-    format_list = ['74s', 'l', 'l', 'I']
-
-    def __init__(self, public_key, start_seq_num, end_seq_num, crawl_id):
-        super(CrawlRequestPayload, self).__init__()
-        self.public_key = public_key
-        self.start_seq_num = start_seq_num
-        self.end_seq_num = end_seq_num
-        self.crawl_id = crawl_id
-
-    def to_pack_list(self):
-        data = [('74s', self.public_key),
-                ('l', self.start_seq_num),
-                ('l', self.end_seq_num),
-                ('I', self.crawl_id)]
-
-        return data
-
-    @classmethod
-    def from_unpack_list(cls, public_key, start_seq_num, end_seq_num, crawl_id):
-        return CrawlRequestPayload(public_key, start_seq_num, end_seq_num, crawl_id)
-
-
-class PeerCrawlRequestPayload(Payload):
-    """
-    Request a crawl that will estimate the balance of a peer that is not older than some seq_num
-    """
-
-    format_list = ['l', 'Q', 'varlenI']
-
-    def __init__(self, seq_num, crawl_id, pack_except):
-        super(PeerCrawlRequestPayload, self).__init__()
-        self.seq_num = seq_num
-        self.crawl_id = crawl_id
-        self.pack_except = pack_except
-
-    def to_pack_list(self):
-        data = [('l', self.seq_num),
-                ('Q', self.crawl_id),
-                ('varlenI', self.pack_except)]
-
-        return data
-
-    @classmethod
-    def from_unpack_list(cls, seq_num, crawl_id, pack_except):
-        return PeerCrawlRequestPayload(seq_num, crawl_id, pack_except)
 
 
 class AuditRequestPayload(Payload):

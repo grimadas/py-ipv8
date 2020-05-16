@@ -16,6 +16,9 @@ class NoodleSettings(object):
     """
 
     def __init__(self):
+        # Time to verify received frontiers
+        self.sync_timeout = 1.0
+
         # The set with block types that should not be broadcast
         self.block_types_bc_disabled = set()
 

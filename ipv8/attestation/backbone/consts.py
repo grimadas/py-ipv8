@@ -1,2 +1,6 @@
 
 FRONTIER_MSG = 1
+BLOCKS_REQ_MSG = 2
+
+
+COMMUNITY_CACHE = u'community_sync'

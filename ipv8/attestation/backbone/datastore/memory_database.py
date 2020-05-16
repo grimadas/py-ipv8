@@ -9,7 +9,7 @@ from six.moves import xrange
 
 from ipv8.attestation.backbone.block import NoodleBlock, GENESIS_HASH, GENESIS_SEQ, EMPTY_PK
 from ipv8.attestation.backbone.datastore.consistency import Chain
-from ipv8.attestation.backbone.datastore.utils import key_to_id
+from ipv8.attestation.backbone.datastore.utils import key_to_id, expand_ranges
 
 
 class NoodleMemoryDatabase(object):
@@ -17,13 +17,14 @@ class NoodleMemoryDatabase(object):
     This class defines an optimized memory database for Noodle.
     """
 
-    def __init__(self, working_directory, db_name, original_db=None):
+    def __init__(self, working_directory, db_name, original_db=None, accept_all_chains=True):
         self.working_directory = working_directory
         self.db_name = db_name
 
         self.identity_chains = dict()
         self.community_chains = dict()
 
+        self.blocks = {}
         self.block_cache = {}
         self.linked_block_cache = {}
 
@@ -40,6 +41,9 @@ class NoodleMemoryDatabase(object):
         self.block_time = {}
         self.block_file = None
 
+        # Will reconcile and track all chains received from blocks and frontiers
+        self.should_accept_all_chains = accept_all_chains
+
         self.original_db = None
         if original_db:
             self.original_db = original_db
@@ -51,7 +55,7 @@ class NoodleMemoryDatabase(object):
                 self.add_block(block)
                 peer_mid = sha1(block.public_key).digest()
                 self.peer_map[peer_mid] = block.public_key
-                
+
     def get_frontier(self, chain_id):
         val = self.get_peer_frontier(chain_id)
         return val if val else self.get_community_frontier(chain_id)
@@ -60,7 +64,7 @@ class NoodleMemoryDatabase(object):
         if com_id in self.community_chains:
             return self.community_chains[com_id].frontier
         return None
- 
+
     def get_peer_frontier(self, peer_id):
         if peer_id in self.identity_chains:
             return self.identity_chains[peer_id].frontier
@@ -68,7 +72,42 @@ class NoodleMemoryDatabase(object):
 
     def get_blocks_by_links(self, links):
         pass
-        #for s,h in links:
+
+    def reconcile_or_create_personal_chain(self, peer_id, frontier):
+        if peer_id not in self.identity_chains:
+            self.identity_chains[peer_id] = Chain()
+        return self.reconcile(peer_id, frontier)
+
+    def reconcile_or_create_community_chain(self, com_id, frontier):
+        if com_id not in self.community_chains:
+            self.community_chains[com_id] = Chain(personal=False)
+        return self.reconcile(com_id, frontier)
+
+    def reconcile_or_create(self, chain_id, frontier):
+        if 'p' in frontier and frontier['p']:
+            return self.reconcile_or_create_personal_chain(chain_id, frontier)
+        else:
+            return self.reconcile_or_create_community_chain(chain_id, frontier)
+
+    def reconcile(self, chain_id, frontier):
+        if chain_id in self.community_chains:
+            return self.community_chains[chain_id].reconcile(frontier)
+        elif chain_id in self.identity_chains:
+            return self.identity_chains[chain_id].reconcile(frontier)
+        return None
+
+    def get_block_by_short_hash(self, short_hash):
+        full_hash = self.short_map.get(short_hash)
+        return self.blocks.get(full_hash)
+
+    def get_blocks_by_request(self, chain_id, request):
+        blocks = set()
+        chain = self.identity_chains[chain_id] if chain_id in self.identity_chains else self.community_chains[chain_id]
+        for b_i in expand_ranges(request['m']):
+            blocks.update({self.get_block_by_short_hash(sh) for sh in chain.chain[b_i]})
+        for sn,sh in request['c']:
+            blocks.add(self.get_block_by_short_hash(sh))
+        return blocks
 
 
     def get_latest_peer_block_by_mid(self, peer_mid):
@@ -102,6 +141,11 @@ class NoodleMemoryDatabase(object):
         Add block to the database and update indexes
         @param block: NoodleBlock
         """
+        if block.hash not in self.blocks:
+            self.blocks[block.hash] = block
+            self.short_map[key_to_id(block.hash)] = block.hash
+
+
         if block.public_key not in self.block_cache:
             # This is a public key => new user
             self.block_cache[block.public_key] = dict()
@@ -112,9 +156,9 @@ class NoodleMemoryDatabase(object):
             self.identity_chains[block.public_key] = Chain()
         block_id = block.sequence_number
         if block_id not in self.block_cache[block.public_key]:
-            self.block_cache[block.public_key][block_id] = {block.hash: block}
-        if key_to_id(block.hash) not in self.short_map:
-            self.short_map[key_to_id(block.hash)] = block.hash
+            self.block_cache[block.public_key][block_id] = {}
+        self.block_cache[block.public_key][block_id].add(block.hash)
+
         self.identity_chains[block.public_key].add_block(block)
 
         # Add to community chain
@@ -177,7 +221,6 @@ class NoodleMemoryDatabase(object):
             cur_seq -= 1
 
         return blocks
-
 
     def get_linked(self, block):
         if (block.link_public_key, block.link_sequence_number) in self.block_cache:

@@ -13,10 +13,10 @@ class Chain:
         self.inconsistencies = set()
         self.terminal = set()
 
-        self.forward_pointers = dict()
-        self.frontier = dict()
-
         self.personal = personal
+        self.forward_pointers = dict()
+        self.frontier = {'p': personal}
+
 
     def calc_terminal(self, current):
         terminal = set()
@@ -66,9 +66,12 @@ class Chain:
         peer_known_seq = expand_ranges([(1, self.max_known_seq_num())]) - self.holes
 
         # Front has blocks that peer is missing => Request from front these blocks
-        front_diff = {'m': front_known_seq - peer_known_seq}
+        f_diff = front_known_seq - peer_known_seq
+        p_diff = peer_known_seq - front_known_seq
+
+        front_diff = {'m': ranges(f_diff)}
         # Peer has blocks that front is missing =>  Send these blocks to front
-        peer_diff = {'m': peer_known_seq - front_known_seq}
+        peer_diff = {'m': ranges(p_diff)}
 
         if 'v' in front:
             # Front has blocks with conflicting hash => Request these blocks

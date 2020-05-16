@@ -1,10 +1,12 @@
+from binascii import hexlify
+
 import asynctest
 
 import orjson as json
 
 from ....attestation.backbone.block import EMPTY_SIG, GENESIS_HASH, GENESIS_SEQ, NoodleBlock
 from ....attestation.backbone.datastore.memory_database import NoodleMemoryDatabase
-from ....attestation.backbone.datastore.utils import decode_links, encode_links, key_to_id
+from ....attestation.backbone.datastore.utils import decode_links, encode_links, key_to_id, hex_to_int
 from ....keyvault.crypto import default_eccrypto
 
 
@@ -138,7 +140,6 @@ class TestNoodleConsistency(asynctest.TestCase):
         # Frontier should indicate holes
         self.assertEqual([(1, 1)], front['h'])
 
-
     def test_block_conflict(self):
         com_key = default_eccrypto.generate_key(u"curve25519").pub().key_to_hash()
         block = TestBlock(com_id=com_key, links={(1, '1234')})
@@ -149,7 +150,6 @@ class TestNoodleConsistency(asynctest.TestCase):
         self.assertEqual(True, [2 in tuples for tuples in front['v']][0])
         # Frontier should indicate holes
         self.assertEqual([(1, 1)], front['h'])
-
 
     def test_community_conflict(self):
         # TODO: TBA
@@ -185,3 +185,34 @@ class TestNoodleConsistency(asynctest.TestCase):
         block = TestBlock()
 
         self.assertEqual(block.__hash__(), block.hash)
+
+    def test_cache(self):
+        com_key = default_eccrypto.generate_key(u"curve25519")
+        k2 = com_key.pub().key_to_hash()
+        print(k2)
+        hex_val = hex_to_int(k2)
+        print(hex_val)
+
+        #hexlify(key)[-KEY_LEN:].decode()
+
+
+    def test_reconcilation(self):
+        db1 = MockDatabase()
+        block = TestBlock()
+        self.assertEqual(block.short_hash, key_to_id(block.hash))
+        block2 = TestBlock(com_id=block.com_id, links={(block.com_seq_num, block.short_hash)})
+        db1.add_block(block)
+        db1.add_block(block2)
+
+        db2 = MockDatabase()
+        block2 = TestBlock(transaction={'id': 43}, com_id=block.com_id, links={(block.com_seq_num, block.short_hash)})
+        db2.add_block(block)
+        db2.add_block(block2)
+
+        to_request, to_send = db1.reconcile(block.com_id, db2.get_frontier(block.com_id))
+        to_request, to_send = db2.reconcile(block.com_id, db1.get_frontier(block.com_id))
+
+        print(to_request)
+        # Request blocks message to the peer
+
+        # Go through reconcilation => send, receive

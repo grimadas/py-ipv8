@@ -4,6 +4,8 @@ from asyncio import get_event_loop, Future
 from binascii import hexlify
 from functools import reduce
 
+from ipv8.attestation.backbone.consts import COMMUNITY_CACHE
+from ipv8.attestation.backbone.datastore.utils import expand_ranges, hex_to_int
 from ...requestcache import NumberCache, RandomNumberCache
 from ...util import maximum_integer
 
@@ -48,6 +50,7 @@ class ChainCrawlCache(IntroCrawlTimeout):
     """
     This cache keeps track of the crawl of a whole chain.
     """
+
     def __init__(self, community, peer, crawl_future, known_chain_length=-1):
         super(ChainCrawlCache, self).__init__(community, peer, identifier=u"chaincrawl")
         self.community = community
@@ -108,7 +111,8 @@ class BlockSignCache(NumberCache):
 
             async def add_later():
                 self.community.request_cache.add(BlockSignCache(self.community, self.half_block, self.sign_future,
-                                                                    self.socket_address, self.timeouts + 1))
+                                                                self.socket_address, self.timeouts + 1))
+
             self.community.request_cache.register_anonymous_task("add-later", add_later, delay=0.0)
         else:
             self.sign_future.set_exception(RuntimeError("Signature request timeout"))
@@ -150,6 +154,47 @@ class CrawlRequestCache(NumberCache):
     def on_timeout(self):
         self._logger.info("Timeout for crawl with id %d", self.number)
         self.crawl_future.set_result(self.received_half_blocks)
+
+
+class CommunitySyncCache(NumberCache):
+    """
+    This cache tracks outstanding sync requests with other peers in a community
+    """
+    def __init__(self, community, chain_id):
+        cache_num = hex_to_int(chain_id)
+        NumberCache.__init__(self, community.request_cache, COMMUNITY_CACHE, cache_num)
+        self.logger = logging.getLogger(self.__class__.__name__)
+        self.community = community
+
+        self.chain_id = chain_id
+        self.working_front = dict()
+
+    @property
+    def timeout_delay(self):
+        return self.community.settings.sync_timeout
+
+    def receive_frontier(self, peer_address, frontier):
+        self.working_front[peer_address] = frontier
+
+    def process_working_front(self):
+        candidate = None
+        cand_max = 0
+        for peer, front in self.working_front.items():
+            to_request, _ = self.community.persistence.reconcile_or_create(self.chain_id, front)
+            if any(to_request.values()) and len(expand_ranges(to_request['m'])) + len(to_request['c']) > cand_max:
+                candidate = (peer, to_request)
+                cand_max = len(expand_ranges(to_request['m'])) + len(to_request['c'])
+        return candidate
+
+    def on_timeout(self):
+        async def add_later():
+            self.community.request_cache.add(CommunitySyncCache(self.community, self.chain_id))
+        # Process all frontiers received
+        cand = self.process_working_front()
+        if cand:
+            # Send request to candidate peer
+            self.community.send_blocks_request(cand[0], self.chain_id, cand[1])
+            self.community.request_cache.register_anonymous_task("add-later", add_later, delay=0.0)
 
 
 class NoodleCrawlRequestCache(NumberCache):
@@ -223,7 +268,8 @@ class AuditRequestCache(NumberCache):
         self.audit_future.set_result(self.received_audit_proofs)
 
     def on_timeout(self):
-        self._logger.info("Timeout for audit with id %d (received proofs: %d)", self.number, len(self.received_audit_proofs))
+        self._logger.info("Timeout for audit with id %d (received proofs: %d)", self.number,
+                          len(self.received_audit_proofs))
         self.audit_future.set_result(self.received_audit_proofs)
 
 
@@ -272,6 +318,7 @@ class PingRequestCache(RandomNumberCache):
     """
     This request cache keeps track of all outstanding requests within the DHTCommunity.
     """
+
     def __init__(self, community, msg_type, peer):
         super(PingRequestCache, self).__init__(community.request_cache, msg_type)
         self.community = community

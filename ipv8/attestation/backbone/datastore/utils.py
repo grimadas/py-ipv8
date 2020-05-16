@@ -7,6 +7,10 @@ def key_to_id(key):
     return hexlify(key)[-KEY_LEN:].decode()
 
 
+def hex_to_int(hex_val):
+    return int(hexlify(hex_val), 16) % 100000000
+
+
 def id_to_int(id):
     return int(id, 16)
 
@@ -24,7 +28,7 @@ def decode_frontier(frontier: dict):
     """
     decoded = dict()
     for k, v in frontier:
-        if k == 'h':
+        if k == 'h' or k == 'm':
             decoded[k] = v
         else:
             decoded[k] = decode_links(v)
@@ -37,7 +41,7 @@ def encode_frontier(frontier):
     """
     encoded = dict()
     for k, v in frontier:
-        if k == 'h':
+        if k == 'h' or k == 'm':
             encoded[k] = v
         else:
             encoded[k] = encode_links(v)
@@ -75,6 +79,8 @@ def expand_ranges(range_vals):
 
 
 def ranges(nums):
+    if not nums:
+        return list()
     nums = sorted(nums)
     gaps = [[s, e] for s, e in zip(nums, nums[1:]) if s + 1 < e]
     edges = iter(nums[:1] + sum(gaps, []) + nums[-1:])

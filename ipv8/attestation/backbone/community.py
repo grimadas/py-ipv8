@@ -16,9 +16,9 @@ from ipv8.attestation.backbone.datastore.database import NoodleDB
 from ipv8.attestation.backbone.datastore.memory_database import NoodleMemoryDatabase
 from .block import ANY_COUNTERPARTY_PK, EMPTY_PK, GENESIS_SEQ, NoodleBlock, UNKNOWN_SEQ
 from .caches import AuditProofRequestCache, ChainCrawlCache, CrawlRequestCache, IntroCrawlTimeout, \
-    NoodleCrawlRequestCache, PingRequestCache, AuditRequestCache
-from .consts import FRONTIER_MSG
-from .datastore.utils import decode_frontier
+    NoodleCrawlRequestCache, PingRequestCache, AuditRequestCache, CommunitySyncCache
+from .consts import FRONTIER_MSG, BLOCKS_REQ_MSG, COMMUNITY_CACHE
+from .datastore.utils import decode_frontier, encode_frontier, hex_to_int, expand_ranges
 from .listener import BlockListener
 from .payload import *
 from .settings import SecurityMode, NoodleSettings
@@ -52,6 +52,7 @@ class SubTrustCommunity(Community):
     def __init__(self, *args, **kwargs):
         self.master_peer = kwargs.pop('master_peer')
         self._prefix = b'\x00' + self.version + self.master_peer.mid
+        self.personal = kwargs.pop('personal')
         super(SubTrustCommunity, self).__init__(*args, **kwargs)
 
 class NoodleBlockListener(BlockListener):
@@ -160,9 +161,9 @@ class NoodleCommunity(Community):
             if self.persistence.get_balance(my_id) <= 0:
                 self.mint(self.settings.initial_mint_value)
 
-    # ----- SubTrust Community routines ------
 
-    def subscribe_to_community(self, community_master_peer):
+    # ----- SubTrust Community routines ------
+    def subscribe_to_community(self, community_master_peer, personal=False):
         """
         Subscribe to the community with the public key master peer.
         Community is identified with a peer.mid.
@@ -177,7 +178,9 @@ class NoodleCommunity(Community):
         elif community_master_peer.mid not in self.pex:
             self.logger.info("Joining community with mid %s", community_master_peer.mid)
             community = SubTrustCommunity(self.my_peer, self.ipv8.endpoint, Network(),
-                                          master_peer=community_master_peer, max_peers=self.settings.max_peers_subtrust)
+                                          master_peer=community_master_peer,
+                                          max_peers=self.settings.max_peers_subtrust,
+                                          personal = personal)
 
             self.ipv8.overlays.append(community)
             self.pex[community_master_peer.mid] = community
@@ -245,15 +248,57 @@ class NoodleCommunity(Community):
 
     @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, FrontierPayload)
     def received_frontier(self, source_address, dist, payload: FrontierPayload):
-        frontier = json.loads(decode_frontier(payload.frontier))
-        # process frontiers => reconcilate
+        frontier = encode_frontier(json.loads(payload.value))
+        cache = self.request_cache.get(COMMUNITY_CACHE, hex_to_int(payload.key))
+        if cache:
+            cache.receive_frontier(source_address, frontier)
+        else:
+            # Create new cache
+            # TODO: what to do with `send` diff - revisit
+            to_request, to_send = self.persistence.reconcile_or_create(payload.key, frontier)
+            if any(to_request.values()):
+                self.send_blocks_request(source_address, payload.key, to_request)
+                self.request_cache.add(CommunitySyncCache(self, payload.key))
 
-        block = self.get_block_class(payload.type).from_payload(payload, self.serializer)
-        peer = Peer(payload.public_key, source_address)
-        self.validate_persist_block(block, peer)
+    def send_blocks_request(self, peer_address, chain_id, request_set):
+        """
+        Request blocks for a peer from a chain
+        """
+        global_time = self.claim_global_time()
+        auth = BinMemberAuthenticationPayload(self.my_peer.public_key.key_to_bin()).to_pack_list()
+        payload = BlocksRequestPayload(chain_id, json.dumps(decode_frontier(request_set))).to_pack_list()
+        dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
+
+        packet = self._ez_pack(self._prefix, BLOCKS_REQ_MSG, [auth, dist, payload])
+        self.endpoint.send(peer_address, packet)
+
+    @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, BlocksRequestPayload)
+    def received_blocks_request(self, source_address, dist, payload: BlocksRequestPayload):
+        blocks_request = encode_frontier(json.loads(payload.value))
+        chain_id = payload.key
+        blocks = self.persistence.get_blocks_by_request(chain_id, blocks_request)
+        self.send_multi_blocks(source_address, chain_id, blocks)
 
 
-def trustchain_sync(self, community_id):
+    def send_multi_blocks(self, address, chain_id, blocks):
+        full_payload = list()
+        for b in blocks:
+            full_payload.append(BlockPayload.from_block(b).to_pack_list())
+        full_payload = BlockResponsePayload(chain_id, json.dumps(full_payload))
+        global_time = self.claim_global_time()
+        dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
+
+        packet = self._ez_pack(self._prefix, 1, [dist, full_payload], False)
+        self.endpoint.send(address, packet)
+
+    @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, BlockResponsePayload)
+    def receive_multi_blocks(self, source_address, dist, payload: BlocksRequestPayload):
+        blocks = json.loads(payload.value)
+        for b in blocks:
+            self.received_block(source_address, dist, b)
+
+
+    def trustchain_sync(self, community_id):
         self.logger.info("Sync for the info peer with mid %s", hexlify(community_id))
         pass
 
@@ -262,6 +307,7 @@ def trustchain_sync(self, community_id):
             if peer.public_key.key_to_bin() == pub_key:
                 return peer
         return None
+
 
     # -------- Ping Functions -------------
     async def ping(self, peer):
@@ -307,15 +353,6 @@ def trustchain_sync(self, community_id):
 
     def mem_db_flush(self):
         self.persistence.commit_block_times()
-
-    def do_db_cleanup(self):
-        """
-        Cleanup the database if necessary.
-        """
-        blocks_in_db = self.persistence.get_number_of_known_blocks()
-        if blocks_in_db > self.settings.max_db_blocks:
-            my_pk = self.my_peer.public_key.key_to_bin()
-            self.persistence.remove_old_blocks(blocks_in_db - self.settings.max_db_blocks, my_pk)
 
     def add_listener(self, listener, block_types):
         """
@@ -376,7 +413,7 @@ def trustchain_sync(self, community_id):
 
         if address:
             self.logger.debug("Sending block to (%s:%d) (%s)", address[0], address[1], block)
-            payload = BlockPayload.from_half_block(block).to_pack_list()
+            payload = BlockPayload.from_block(block).to_pack_list()
             packet = self._ez_pack(self._prefix, 1, [dist, payload], False)
             self.endpoint.send(address, packet)
         else:
@@ -1107,6 +1144,7 @@ def trustchain_sync(self, community_id):
         if latest_block_num and sq == latest_block_num + 1:
             return []  # We don't have to crawl this node since we have its whole chain
         return self.send_crawl_request(peer, peer.public_key.key_to_bin(), sq, sq)
+
 
     def send_crawl_request(self, peer, public_key, start_seq_num, end_seq_num, for_half_block=None):
         """

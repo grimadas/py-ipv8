@@ -105,6 +105,10 @@ class NoodleBlock(object):
         self.crypto = default_eccrypto
         self._logger = logging.getLogger(self.__class__.__name__)
 
+    @property
+    def short_hash(self):
+        return key_to_id(self.hash)
+
     @classmethod
     def from_payload(cls, payload, serializer):
         """
