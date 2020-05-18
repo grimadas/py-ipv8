@@ -250,7 +250,6 @@ class NoodleCommunity(Community):
         """
         Request blocks for a peer from a chain
         """
-        print(request_set)
         global_time = self.claim_global_time()
         auth = BinMemberAuthenticationPayload(self.my_peer.public_key.key_to_bin()).to_pack_list()
         payload = BlocksRequestPayload(chain_id, json.dumps(decode_frontier(request_set))).to_pack_list()
@@ -492,7 +491,6 @@ class NoodleCommunity(Community):
         Process a received half block.
         """
         self.validate_persist_block(blk, peer)
-        print("Received block %s" % blk)
 
         # TODO add bilateral agreements
 
