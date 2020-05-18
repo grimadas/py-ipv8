@@ -250,6 +250,8 @@ class NoodleCommunity(Community):
         """
         Request blocks for a peer from a chain
         """
+        self._logger.debug("Requesting blocks %s from peer %s:%d",
+                           request_set, peer_address[0], peer_address[1])
         global_time = self.claim_global_time()
         auth = BinMemberAuthenticationPayload(self.my_peer.public_key.key_to_bin()).to_pack_list()
         payload = BlocksRequestPayload(chain_id, json.dumps(decode_frontier(request_set))).to_pack_list()

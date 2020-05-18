@@ -113,7 +113,7 @@ class TestNoodleCommunityTwoNodes(TestNoodleCommunityBase):
 
     async def test_basic_horizontal_chain_conclict_three_txs(self):
         """
-        Test a basic horizontal chain with conflicts.
+        Test a basic horizontal chain with conflicts. The final result should be a frontier consisting of two blocks.
         """
         await self.introduce_nodes()
 
@@ -132,8 +132,35 @@ class TestNoodleCommunityTwoNodes(TestNoodleCommunityBase):
         self.nodes[0].endpoint.open()
         self.nodes[1].endpoint.open()
 
-        await sleep(2) # This requires two rounds for reconciliation (each in 1 second)
+        await sleep(2)  # This requires two rounds for reconciliation (each in 1 second)
 
         frontier_a = self.nodes[0].overlay.persistence.get_frontier(self.community_id)
         frontier_b = self.nodes[1].overlay.persistence.get_frontier(self.community_id)
         self.assertEqual(frontier_a, frontier_b)
+
+
+class TestNoodleCommunityThreeNodes(TestNoodleCommunityBase):
+    __testing__ = True
+    NUM_NODES = 3
+
+    async def test_basic_horizontal_chain_three_tx(self):
+        """
+        With 3 peers, check that one peer builds upon the frontier containing the blocks of the other peers.
+        """
+        await self.introduce_nodes()
+
+        self.nodes[0].overlay.sign_block(self.nodes[0].overlay.my_peer,
+                                         com_id=self.community_id, block_type=b'test', transaction={})
+        self.nodes[1].overlay.sign_block(self.nodes[1].overlay.my_peer,
+                                         com_id=self.community_id, block_type=b'test', transaction={})
+
+        await sleep(1)
+
+        self.nodes[1].overlay.sign_block(self.nodes[2].overlay.my_peer,
+                                         com_id=self.community_id, block_type=b'test', transaction={})
+
+        await sleep(1)
+
+        # The frontier should be the last block craeted by peer 2
+        frontier = self.nodes[2].overlay.persistence.get_frontier(self.community_id)
+        self.assertEqual(len(list(frontier['v'])), 1)
