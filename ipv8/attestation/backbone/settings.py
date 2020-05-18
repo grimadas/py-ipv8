@@ -19,7 +19,7 @@ class NoodleSettings(object):
         # Time to verify received frontiers
         self.sync_timeout = 1.0
 
-        # Track personal chains of all neighbors
+        # Track personal chains of all neighbors (e.g., join the community around a peer when receiving an introduction response from it)
         self.track_neighbours_chains = False
 
         # The set with block types that should not be broadcast
@@ -59,7 +59,7 @@ class NoodleSettings(object):
         self.sync_time = 1
 
         # Security mode
-        self.security_mode = SecurityMode.AUDIT
+        self.security_mode = SecurityMode.VANILLA
 
         # Security epsilon
         self.com_size = 2

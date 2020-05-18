@@ -121,8 +121,9 @@ class NoodleMemoryDatabase(object):
         blocks = set()
         chain = self.identity_chains[chain_id] if chain_id in self.identity_chains else self.community_chains[chain_id]
         for b_i in expand_ranges(request['m']):
+            # FIXME will definitely fail
             blocks.update({self.get_block_by_short_hash(sh) for sh in chain.chain[b_i]})
-        for sn,sh in request['c']:
+        for sn, sh in request['c']:
             blocks.add(self.get_block_by_short_hash(sh))
         return blocks
 
@@ -157,11 +158,10 @@ class NoodleMemoryDatabase(object):
             self.identity_chains[block.public_key] = Chain(block.public_key)
         block_id = block.sequence_number
         if block_id not in self.block_cache[block.public_key]:
-            self.block_cache[block.public_key][block_id] = {}
+            self.block_cache[block.public_key][block_id] = set()
         self.block_cache[block.public_key][block_id].add(block.hash)
 
         self.identity_chains[block.public_key].add_block(block)
-
 
         # Add to community chain
         if block.com_id != EMPTY_PK:

@@ -3,6 +3,7 @@ The Noodle community.
 """
 import logging
 import random
+import struct
 from asyncio import Future, Queue, ensure_future, sleep
 from binascii import hexlify, unhexlify
 from collections import deque
@@ -89,6 +90,7 @@ class NoodleCommunity(Community):
         super(NoodleCommunity, self).__init__(*args, **kwargs)
         self.request_cache = RequestCache()
         self.logger = logging.getLogger(self.__class__.__name__)
+        self.peer_subscriptions = {}  # keeps track of which communities each peer is part of
 
         if not self.persistence:
             self.persistence = self.DB_CLASS(working_directory, db_name, self.my_peer.public_key.key_to_bin())
@@ -106,9 +108,6 @@ class NoodleCommunity(Community):
 
         # TODO: revisit queues
         # Block queues
-        self.transaction_queue = Queue()
-        self.transaction_queue_task = ensure_future(self.evaluate_transfer_queue())
-
         self.incoming_block_queue = Queue()
         self.incoming_block_queue_task = ensure_future(self.evaluate_incoming_block_queue())
 
@@ -124,45 +123,16 @@ class NoodleCommunity(Community):
         self.proof_requests = {}
 
         self.decode_map.update({
-            chr(1): self.received_half_block,
-            chr(2): self.received_crawl_request,
-            chr(3): self.received_crawl_response,
-            chr(4): self.received_half_block_pair,
-            chr(5): self.received_half_block_broadcast,
-            chr(6): self.received_half_block_pair_broadcast,
-            chr(7): self.received_empty_crawl_response,
-            chr(8): self.received_peer_crawl_request,
-            chr(9): self.received_peer_crawl_response,
-            chr(10): self.received_audit_proofs,
-            chr(11): self.received_audit_proofs_request,
-            chr(12): self.received_audit_request,
-            chr(13): self.received_mint_request,
-            chr(14): self.received_audit_proofs_response,
-            chr(15): self.on_ping_request,
-            chr(16): self.on_ping_response,
+            # TODO update
+            chr(BLOCKS_REQ_MSG): self.received_blocks_request,
+            chr(BLOCK_MSG): self.received_block,
+            chr(BLOCK_CAST_MSG): self.received_block_broadcast,
             chr(FRONTIER_MSG): self.received_frontier
         })
-
-        # TODO: remove
-        # Add the listener
-        self.add_listener(NoodleBlockListener(), [b'spend', b'claim'])
 
         # Enable the memory database
         orig_db = self.persistence
         self.persistence = NoodleMemoryDatabase(working_directory, db_name, orig_db)
-
-        # Add the system minter(s)
-        # TODO: remove system minter
-
-        # If we are the system minter, init the community
-        if hexlify(self.my_peer.public_key.key_to_bin()) in self.settings.minters or not self.settings.minters:
-            self._logger.info("I am the system minter - init our own community")
-            self.init_minter_community()
-
-            # Mint if needed
-            my_id = self.persistence.key_to_id(self.my_peer.public_key.key_to_bin())
-            if self.persistence.get_balance(my_id) <= 0:
-                self.mint(self.settings.initial_mint_value)
 
     def add_interest(self):
         pass
@@ -180,15 +150,15 @@ class NoodleCommunity(Community):
             self.logger.warning("I am a crawler - not joining subtrust communities")
         elif not self.ipv8:
             self.logger.error('No IPv8 service object available, cannot start SubTrustCommunity')
-        elif community_master_peer.mid not in self.pex:
-            self.logger.info("Joining community with mid %s", community_master_peer.mid)
+        elif community_master_peer.public_key.key_to_bin() not in self.pex:
+            self.logger.info("Joining community with mid %s (personal? %s)", community_master_peer.mid, personal)
             community = SubTrustCommunity(self.my_peer, self.ipv8.endpoint, Network(),
                                           master_peer=community_master_peer,
                                           max_peers=self.settings.max_peers_subtrust,
                                           personal=personal)
 
             self.ipv8.overlays.append(community)
-            self.pex[community_master_peer.mid] = community
+            self.pex[community_master_peer.public_key.key_to_bin()] = community
 
             # Find other peers in the community
             if self.bootstrap_master:
@@ -199,7 +169,7 @@ class NoodleCommunity(Community):
                 self.ipv8.strategies.append((RandomWalk(community), self.settings.max_peers_subtrust))
 
             # Join the protocol audits
-            self.join_community_gossip(community_master_peer.mid, self.settings.security_mode, self.settings.sync_time)
+            self.join_community_gossip(community_master_peer.public_key.key_to_bin(), self.settings.security_mode, self.settings.sync_time)
 
     def join_community_gossip(self, community_mid, mode, sync_time):
         """
@@ -218,14 +188,7 @@ class NoodleCommunity(Community):
         @param sync_time: interval in seconds to run the task
         """
         # Start sync task after the discovery
-        if mode == SecurityMode.VANILLA:
-            task = self.gossip_sync_task
-        elif mode == SecurityMode.AUDIT:
-            # task = self.aud
-            pass
-        task = self.gossip_sync_task \
-            if mode == SecurityMode.VANILLA \
-            else self.trustchain_active_sync
+        task = self.gossip_sync_task if mode == SecurityMode.VANILLA else self.trustchain_active_sync
 
         self.periodic_sync_lc[community_mid] = self.register_task("sync_" + str(community_mid), task, community_mid,
                                                                   delay=random.random(),
@@ -252,10 +215,10 @@ class NoodleCommunity(Community):
                 signed_state = (my_id, signature, state_hash)
                 frontier['state'] = signed_state
 
-            peer_set = self.pex[community_id].get_peers()
+            peer_set = self.pex[community_id].get_peers() # select max num randomly
             self.send_frontier(community_id, frontier, peer_set)
 
-    def send_frontier(self, id, frontier, peers):
+    def send_frontier(self, community_id, frontier, peers):
         global_time = self.claim_global_time()
         dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
 
@@ -263,11 +226,11 @@ class NoodleCommunity(Community):
 
         serialized = json.dumps(decode_frontier(frontier))
 
-        payload = FrontierPayload(id, serialized)
+        payload = FrontierPayload(community_id, serialized).to_pack_list()
         packet = self._ez_pack(self._prefix, FRONTIER_MSG, [dist, payload], False)
 
         for p in peers:
-            self.endpoint.send(p, packet)
+            self.endpoint.send(p.address, packet)
 
     @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, FrontierPayload)
     def received_frontier(self, source_address, dist, payload: FrontierPayload):
@@ -287,6 +250,7 @@ class NoodleCommunity(Community):
         """
         Request blocks for a peer from a chain
         """
+        print(request_set)
         global_time = self.claim_global_time()
         auth = BinMemberAuthenticationPayload(self.my_peer.public_key.key_to_bin()).to_pack_list()
         payload = BlocksRequestPayload(chain_id, json.dumps(decode_frontier(request_set))).to_pack_list()
@@ -295,29 +259,20 @@ class NoodleCommunity(Community):
         packet = self._ez_pack(self._prefix, BLOCKS_REQ_MSG, [auth, dist, payload])
         self.endpoint.send(peer_address, packet)
 
-    @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, BlocksRequestPayload)
-    def received_blocks_request(self, source_address, dist, payload: BlocksRequestPayload):
+    @lazy_wrapper(GlobalTimeDistributionPayload, BlocksRequestPayload)
+    def received_blocks_request(self, peer, dist, payload: BlocksRequestPayload):
         blocks_request = encode_frontier(json.loads(payload.value))
         chain_id = payload.key
         blocks = self.persistence.get_blocks_by_request(chain_id, blocks_request)
-        self.send_multi_blocks(source_address, chain_id, blocks)
+        self.send_multi_blocks(peer.address, chain_id, blocks)
 
     def send_multi_blocks(self, address, chain_id, blocks):
-        full_payload = list()
-        for b in blocks:
-            full_payload.append(BlockPayload.from_block(b).to_pack_list())
-        full_payload = BlockResponsePayload(chain_id, json.dumps(full_payload))
-        global_time = self.claim_global_time()
-        dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
-
-        packet = self._ez_pack(self._prefix, MUTLI_BLOCKS_MSG, [dist, full_payload], False)
-        self.endpoint.send(address, packet)
-
-    @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, BlockResponsePayload)
-    def receive_multi_blocks(self, source_address, dist, payload: BlocksRequestPayload):
-        blocks = json.loads(payload.value)
-        for b in blocks:
-            self.received_block(source_address, dist, b)
+        for block in blocks:
+            global_time = self.claim_global_time()
+            dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
+            payload = BlockPayload.from_block(block).to_pack_list()
+            packet = self._ez_pack(self._prefix, BLOCK_MSG, [dist, payload], False)
+            self.endpoint.send(address, packet)
 
     def get_peer(self, pub_key):
         for peer in self.get_peers():
@@ -471,6 +426,7 @@ class NoodleCommunity(Community):
             # There is a counterparty to sign => Send to the counterparty first
             self.send_block(block, address=peer.address)
             # TODO: send to the community?
+            return succeed(block)
 
     def self_sign_block(self, block_type=b'unknown', transaction=None, com_id=None, links=None, fork_seq=None):
         return self.sign_block(self.my_peer, block_type, transaction, com_id, links, fork_seq)
@@ -536,19 +492,9 @@ class NoodleCommunity(Community):
         Process a received half block.
         """
         self.validate_persist_block(blk, peer)
-        # TODO: Add reaction to the block
-        if status and audit_proofs:
-            # TODO: revisit the audit proofs reaction
-            if not self.validate_audit_proofs(status, audit_proofs, blk):
-                raise RuntimeError("Block proofs are not valid, refusing to sign: %s", blk)
-        try:
-            should_sign = await maybe_coroutine(self.should_sign, blk)
-        except Exception as e:
-            self.logger.error("Error while determining whether to sign (error: %s)", e)
-            return
-        if not should_sign:
-            self.logger.info("Not signing block %s", blk)
-            return
+        print("Received block %s" % blk)
+
+        # TODO add bilateral agreements
 
     def choose_community_peers(self, com_peers, current_seed, commitee_size):
         rand = random.Random(current_seed)
@@ -750,27 +696,45 @@ class NoodleCommunity(Community):
         return True
 
     # ---- Introduction handshakes ----------------
-    @synchronized
     def create_introduction_request(self, socket_address, extra_bytes=b''):
-        # TODO: add some information about interest and communities
-        # extra_bytes = struct.pack('>l', self.get_chain_length())
+        communities = []
+        for community_id in self.pex.keys():
+            communities.append(hexlify(community_id).decode())
+        extra_bytes = json.dumps(communities)
         return super(NoodleCommunity, self).create_introduction_request(socket_address, extra_bytes)
 
-    @synchronized
     def create_introduction_response(self, lan_socket_address, socket_address, identifier,
                                      introduction=None, extra_bytes=b''):
-        # TODO: send your interest
+        communities = []
+        for community_id in self.pex.keys():
+            communities.append(hexlify(community_id).decode())
+        extra_bytes = json.dumps(communities)
         return super(NoodleCommunity, self).create_introduction_response(lan_socket_address, socket_address,
                                                                          identifier, introduction, extra_bytes)
 
-    @synchronized
+    def process_peer_interests(self, peer, communities):
+        for community in communities:
+            community_id = unhexlify(community)
+            if community_id not in self.peer_subscriptions:
+                self.peer_subscriptions[community_id] = []
+            self.peer_subscriptions[community_id] = peer.public_key.key_to_bin()
+
+            if community_id in self.pex:
+                self.pex[community_id].walk_to(peer.address)
+
     def introduction_response_callback(self, peer, dist, payload):
-        # TODO: add interest connection
+        communities = json.loads(payload.extra_bytes)
+        self.process_peer_interests(peer, communities)
+
         if self.settings.track_neighbours_chains:
             self.subscribe_to_community(peer, personal=True)
         if self.settings.crawler:
             # TODO: add crawling functionality
             pass
+
+    def introduction_request_callback(self, peer, dist, payload):
+        communities = json.loads(payload.extra_bytes)
+        self.process_peer_interests(peer, communities)
 
     async def unload(self):
         self.logger.debug("Unloading the Noodle Community.")
@@ -783,12 +747,8 @@ class NoodleCommunity(Community):
         for mid in self.pex:
             if mid in self.periodic_sync_lc and not self.periodic_sync_lc[mid].done():
                 self.periodic_sync_lc[mid].cancel()
-        if self.transfer_lc and not self.transfer_lc.done():
-            self.transfer_lc.cancel()
 
         # Stop queues
-        if not self.transfer_queue_task.done():
-            self.transfer_queue_task.cancel()
         if not self.incoming_block_queue_task.done():
             self.incoming_block_queue_task.cancel()
         if not self.audit_response_queue_task.done():

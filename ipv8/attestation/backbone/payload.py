@@ -62,8 +62,10 @@ class BlockBroadcastPayload(BlockPayload):
 
     format_list = ['varlenI', 'varlenI', '74s', 'I', 'varlenI', 'varlenI', '74s', 'I', '64s', 'Q', 'I']
 
-    def __init__(self, *args, ttl=1):
-        super(BlockBroadcastPayload, self).__init__(*args)
+    def __init__(self, block_type, transaction, public_key, sequence_number,
+                 previous, links, com_id, com_seq_num, signature, timestamp, ttl):
+        super(BlockBroadcastPayload, self).__init__(block_type, transaction, public_key, sequence_number,
+                 previous, links, com_id, com_seq_num, signature, timestamp)
         self.ttl = ttl
 
     @classmethod
@@ -93,15 +95,15 @@ class BlockBroadcastPayload(BlockPayload):
 
 
 class KVPayload(Payload):
-    format_list = ['varlenH', 'varlenI']
+    format_list = ['varlenI', 'varlenI']
 
     def __init__(self, key, value):
         Payload.__init__(self)
-        self.key = id
+        self.key = key
         self.value = value
 
     def to_pack_list(self):
-        return [('varlenH', self.key), ('varlenI', self.value)]
+        return [('varlenI', self.key), ('varlenI', self.value)]
 
     @classmethod
     def from_unpack_list(cls, key, value):

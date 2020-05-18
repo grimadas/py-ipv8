@@ -122,16 +122,18 @@ class NoodleBlock(object):
 
     def __str__(self):
         # This makes debugging and logging easier
-        return "Block {0} from ...{1}:{2} links {3} for {4} type {5}".format(
+        return "Block {0} from ...{1}:{2} links {3} for {4} type {5} cseq {6} cid {7}".format(
             hexlify(self.hash)[-8:],
             hexlify(self.public_key)[-8:],
             self.sequence_number,
             self.links,
             self.transaction,
-            self.type)
+            self.type,
+            self.com_seq_num,
+            self.com_id)
 
     def __hash__(self):
-        return self.hash
+        return self.hash_number
 
     def __eq__(self, other):
         if not isinstance(other, NoodleBlock):
@@ -207,10 +209,8 @@ class NoodleBlock(object):
         ret.type = block_type
         ret.transaction = transaction
 
-        linked = None
-        link_seq_num = 0
-
         if com_id:
+            ret.com_id = com_id
             # There is community specified => will base block on the latest known information
             if links:
                 linked = links
@@ -220,14 +220,13 @@ class NoodleBlock(object):
                 linked = frontier['v'] if frontier else set()
                 link_seq_num = max(frontier['v'])[0] if frontier else 0
 
-        if prevs:
-            ret.previous = prevs
-            ret.sequence_number = seq_num + 1
-
-        if linked:
             ret.links = linked
             ret.com_seq_num = link_seq_num + 1
             ret.com_id = com_id
+
+        if prevs:
+            ret.previous = prevs
+            ret.sequence_number = seq_num + 1
 
         ret._transaction = json.dumps(ret.transaction)
         ret._links = json.dumps(decode_links(ret.links))

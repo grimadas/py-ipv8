@@ -27,7 +27,7 @@ def decode_frontier(frontier: dict):
     Decode for packet
     """
     decoded = dict()
-    for k, v in frontier:
+    for k, v in frontier.items():
         if k in ('h', 'm', 'state'):
             decoded[k] = v
         else:
@@ -40,7 +40,7 @@ def encode_frontier(frontier):
     Encode to python dict
     """
     encoded = dict()
-    for k, v in frontier:
+    for k, v in frontier.items():
         if k in ('h', 'm', 'state'):
             encoded[k] = v
         else:

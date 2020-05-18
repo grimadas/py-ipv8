@@ -32,7 +32,7 @@ class TestBlock(NoodleBlock):
         transaction = transaction or {'id': 42}
 
         if not com_id:
-            com_id = crypto.generate_key(u"curve25519").pub().key_to_hash()
+            com_id = crypto.generate_key(u"curve25519").pub().key_to_bin()
 
         if key:
             self.key = key
@@ -109,7 +109,6 @@ class TestNoodleBlocks(asynctest.TestCase):
 
         self.assertTrue(default_eccrypto.is_valid_signature(pub_key, hash_val, sign))
 
-
     def test_create_next(self):
         """
         Test creating a block that points towards a previous block in a personal chain
@@ -128,7 +127,7 @@ class TestNoodleBlocks(asynctest.TestCase):
         """
         Test creating a linked half block
         """
-        com_key = default_eccrypto.generate_key(u"curve25519").pub().key_to_hash()
+        com_key = default_eccrypto.generate_key(u"curve25519").pub().key_to_bin()
         # Generate community id
         gen = TestBlock(com_id=com_key)
         db = MockDatabase()
@@ -154,7 +153,7 @@ class TestNoodleConsistency(asynctest.TestCase):
         self.assertEqual([(1, 1)], front['h'])
 
     def test_block_no_linked(self):
-        com_key = default_eccrypto.generate_key(u"curve25519").pub().key_to_hash()
+        com_key = default_eccrypto.generate_key(u"curve25519").pub().key_to_bin()
         block = TestBlock(com_id=com_key, links={(1, '1234')})
         db = MockDatabase()
         db.add_block(block)
@@ -165,7 +164,7 @@ class TestNoodleConsistency(asynctest.TestCase):
         self.assertEqual([(1, 1)], front['h'])
 
     def test_block_conflict(self):
-        com_key = default_eccrypto.generate_key(u"curve25519").pub().key_to_hash()
+        com_key = default_eccrypto.generate_key(u"curve25519").pub().key_to_bin()
         block = TestBlock(com_id=com_key, links={(1, '1234')})
         db = MockDatabase()
         db.add_block(block)
@@ -176,8 +175,7 @@ class TestNoodleConsistency(asynctest.TestCase):
         self.assertEqual([(1, 1)], front['h'])
 
     def test_community_conflict(self):
-        # TODO: TBA
-        com_key = default_eccrypto.generate_key(u"curve25519").pub().key_to_hash()
+        com_key = default_eccrypto.generate_key(u"curve25519").pub().key_to_bin()
         block = TestBlock(com_id=com_key, links={(1, '1234')})
         db = MockDatabase()
         db.add_block(block)
@@ -210,20 +208,9 @@ class TestNoodleConsistency(asynctest.TestCase):
 
         self.assertEqual(block.__hash__(), block.hash)
 
-    def test_cache(self):
-        com_key = default_eccrypto.generate_key(u"curve25519")
-        k2 = com_key.pub().key_to_hash()
-        print(k2)
-        hex_val = hex_to_int(k2)
-        print(hex_val)
-
-        #hexlify(key)[-KEY_LEN:].decode()
-
-
     def test_reconcilation(self):
         db1 = MockDatabase()
         block = TestBlock()
-        self.assertEqual(block.short_hash, key_to_id(block.hash))
         block2 = TestBlock(com_id=block.com_id, links={(block.com_seq_num, block.short_hash)})
         db1.add_block(block)
         db1.add_block(block2)
@@ -234,9 +221,6 @@ class TestNoodleConsistency(asynctest.TestCase):
         db2.add_block(block2)
 
         to_request, to_send = db1.reconcile(block.com_id, db2.get_frontier(block.com_id))
+        self.assertEqual(list(to_request['c'])[0][0], 2)
         to_request, to_send = db2.reconcile(block.com_id, db1.get_frontier(block.com_id))
-
-        print(to_request)
-        # Request blocks message to the peer
-
-        # Go through reconcilation => send, receive
+        self.assertEqual(list(to_request['c'])[0][0], 2)
