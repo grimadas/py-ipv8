@@ -106,10 +106,12 @@ class NoodleCommunity(Community):
         # self.operation_queue = Queue()
         # self.operation_queue_task
 
-        # TODO: revisit queues
         # Block queues
         self.incoming_block_queue = Queue()
         self.incoming_block_queue_task = ensure_future(self.evaluate_incoming_block_queue())
+
+        self.outgoing_block_queue = Queue()
+        self.outgoing_block_queue_task = ensure_future(self.evaluate_outgoing_block_queue())
 
         self.audit_response_queue = Queue()
         self.audit_response_queue_task = ensure_future(self.evaluate_audit_response_queue())
@@ -123,7 +125,6 @@ class NoodleCommunity(Community):
         self.proof_requests = {}
 
         self.decode_map.update({
-            # TODO update
             chr(BLOCKS_REQ_MSG): self.received_blocks_request,
             chr(BLOCK_MSG): self.received_block,
             chr(BLOCK_CAST_MSG): self.received_block_broadcast,
@@ -387,7 +388,7 @@ class NoodleCommunity(Community):
             self.logger.debug("Sending block to (%s:%d) (%s)", address[0], address[1], block)
             payload = BlockPayload.from_block(block).to_pack_list()
             packet = self._ez_pack(self._prefix, BLOCK_MSG, [dist, payload], False)
-            self.endpoint.send(address, packet)
+            self.outgoing_block_queue.put_nowait((address, packet))
         else:
             self.logger.debug("Broadcasting block %s", block)
             payload = BlockBroadcastPayload.from_half_block(block, ttl).to_pack_list()
@@ -402,8 +403,16 @@ class NoodleCommunity(Community):
                 self.logger.debug("Broadcasting block in a main-channel  to %s peers", f)
                 peers = (p.address for p in random.sample(self.get_peers(), f))
             for p in peers:
-                self.endpoint.send(p, packet)
+                self.outgoing_block_queue.put_nowait((p, packet))
             self._add_broadcasted_blockid(block.block_id)
+
+    async def evaluate_outgoing_block_queue(self):
+        while True:
+            packet_info = await self.outgoing_block_queue.get()
+            address, packet = packet_info
+            self.endpoint.send(address, packet)
+
+            await sleep(self.settings.block_queue_interval / 1000)
 
     @synchronized
     def sign_block(self, peer, public_key=EMPTY_PK, block_type=b'unknown',
@@ -751,6 +760,8 @@ class NoodleCommunity(Community):
         # Stop queues
         if not self.incoming_block_queue_task.done():
             self.incoming_block_queue_task.cancel()
+        if not self.outgoing_block_queue_task.done():
+            self.outgoing_block_queue_task.cancel()
         if not self.audit_response_queue_task.done():
             self.audit_response_queue_task.cancel()
 
