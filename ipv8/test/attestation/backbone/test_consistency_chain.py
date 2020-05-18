@@ -1,8 +1,9 @@
-from binascii import hexlify
+from binascii import hexlify, unhexlify
 
 import asynctest
 
 import orjson as json
+from hashlib import sha256
 
 from ....attestation.backbone.block import EMPTY_SIG, GENESIS_HASH, GENESIS_SEQ, NoodleBlock
 from ....attestation.backbone.datastore.memory_database import NoodleMemoryDatabase
@@ -85,6 +86,29 @@ class TestNoodleBlocks(asynctest.TestCase):
         self.assertEqual(block.signature, EMPTY_SIG)
         self.assertEqual(1, block.sequence_number)
         self.assertEqual(block.type, b'test')
+
+    def test_sign_state(self):
+        key = default_eccrypto.generate_key(u"curve25519")
+        state = {'val': 100}
+        state_blob = json.dumps(state)
+        state_hash = sha256(state_blob).digest()
+        signature = default_eccrypto.create_signature(key, state_hash)
+
+        # create an audit proof
+        my_id = hexlify(key.pub().key_to_bin()).decode()
+        sig = hexlify(signature).decode()
+        st_h = hexlify(state_hash).decode()
+
+        audit = (my_id, sig, st_h)
+        val = json.dumps(audit)
+        unval = json.loads(val)
+
+        pub_key = default_eccrypto.key_from_public_bin(unhexlify(unval[0]))
+        sign = unhexlify(unval[1])
+        hash_val = unhexlify(unval[2])
+
+        self.assertTrue(default_eccrypto.is_valid_signature(pub_key, hash_val, sign))
+
 
     def test_create_next(self):
         """

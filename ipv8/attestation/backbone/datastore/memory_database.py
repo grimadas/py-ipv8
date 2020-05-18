@@ -1,13 +1,10 @@
 import csv
 import logging
-import os
 import time
 from binascii import hexlify
 from hashlib import sha1
 
-from six.moves import xrange
-
-from ipv8.attestation.backbone.block import NoodleBlock, GENESIS_HASH, GENESIS_SEQ, EMPTY_PK
+from ipv8.attestation.backbone.block import NoodleBlock, EMPTY_PK
 from ipv8.attestation.backbone.datastore.consistency import Chain
 from ipv8.attestation.backbone.datastore.utils import key_to_id, expand_ranges
 
@@ -26,7 +23,6 @@ class NoodleMemoryDatabase(object):
 
         self.blocks = {}
         self.block_cache = {}
-        self.linked_block_cache = {}
 
         self.block_types = {}
         self.latest_blocks = {}
@@ -60,6 +56,30 @@ class NoodleMemoryDatabase(object):
         val = self.get_peer_frontier(chain_id)
         return val if val else self.get_community_frontier(chain_id)
 
+    def get_peer_proofs(self, chain, blk_hash, state):
+        pass
+
+    def is_state_consistent(self, chain_id):
+        if chain_id not in self.community_chains and chain_id not in self.identity_chains:
+            return None
+        return self.community_chains[chain_id].is_state_consistent() if chain_id in self.community_chains \
+            else self.identity_chains[chain_id].is_state_consistent()
+
+    def get_latest_state(self, chain_id, state_name=None):
+        if chain_id not in self.community_chains and chain_id not in self.identity_chains:
+            return None
+        states = self.community_chains[chain_id].states if chain_id in self.community_chains \
+            else self.identity_chains[chain_id].states
+        if state_name:
+            return states.get(state_name)
+        else:
+            return states
+
+    def get_chain(self, com_id):
+        if com_id not in self.community_chains and com_id not in self.identity_chains:
+            return None
+        return self.community_chains[com_id] if com_id in self.community_chains else self.identity_chains[com_id]
+
     def get_community_frontier(self, com_id):
         if com_id in self.community_chains:
             return self.community_chains[com_id].frontier
@@ -70,17 +90,14 @@ class NoodleMemoryDatabase(object):
             return self.identity_chains[peer_id].frontier
         return None
 
-    def get_blocks_by_links(self, links):
-        pass
-
     def reconcile_or_create_personal_chain(self, peer_id, frontier):
         if peer_id not in self.identity_chains:
-            self.identity_chains[peer_id] = Chain()
+            self.identity_chains[peer_id] = Chain(peer_id)
         return self.reconcile(peer_id, frontier)
 
     def reconcile_or_create_community_chain(self, com_id, frontier):
         if com_id not in self.community_chains:
-            self.community_chains[com_id] = Chain(personal=False)
+            self.community_chains[com_id] = Chain(com_id, personal=False)
         return self.reconcile(com_id, frontier)
 
     def reconcile_or_create(self, chain_id, frontier):
@@ -109,15 +126,6 @@ class NoodleMemoryDatabase(object):
             blocks.add(self.get_block_by_short_hash(sh))
         return blocks
 
-
-    def get_latest_peer_block_by_mid(self, peer_mid):
-        if peer_mid in self.peer_map:
-            pub_key = self.peer_map[peer_mid]
-            return self.get_latest(pub_key)
-
-    def add_connections(self, peer_a, peer_b):
-        self.known_connections.add_edge(peer_a, peer_b)
-
     def get_block_class(self, block_type):
         """
         Get the block class for a specific block type.
@@ -131,11 +139,6 @@ class NoodleMemoryDatabase(object):
         if peer.mid not in self.peer_map:
             self.peer_map[peer.mid] = peer.public_key.key_to_bin()
 
-    def get_latest_peer_block_by_mid(self, peer_mid):
-        if peer_mid in self.peer_map:
-            pub_key = self.peer_map[peer_mid]
-            return self.get_latest(pub_key)
-
     def add_block(self, block: NoodleBlock):
         """
         Add block to the database and update indexes
@@ -145,15 +148,13 @@ class NoodleMemoryDatabase(object):
             self.blocks[block.hash] = block
             self.short_map[key_to_id(block.hash)] = block.hash
 
-
         if block.public_key not in self.block_cache:
             # This is a public key => new user
             self.block_cache[block.public_key] = dict()
-            self.block_time[block.public_key] = dict()
 
             self.short_map[key_to_id(block.public_key)] = block.public_key
             # Initialize identity chain
-            self.identity_chains[block.public_key] = Chain()
+            self.identity_chains[block.public_key] = Chain(block.public_key)
         block_id = block.sequence_number
         if block_id not in self.block_cache[block.public_key]:
             self.block_cache[block.public_key][block_id] = {}
@@ -161,14 +162,15 @@ class NoodleMemoryDatabase(object):
 
         self.identity_chains[block.public_key].add_block(block)
 
+
         # Add to community chain
         if block.com_id != EMPTY_PK:
             if block.com_id not in self.community_chains:
-                self.community_chains[block.com_id] = Chain(personal=False)
+                self.community_chains[block.com_id] = Chain(block.com_id, personal=False)
             self.community_chains[block.com_id].add_block(block)
 
         # time when block is received by peer
-        self.block_time[block.public_key][block_id] = int(round(time.time() * 1000))
+        self.block_time[block.hash] = int(round(time.time() * 1000))
 
         # add to persistent
         # if self.original_db and self.do_commit:
@@ -176,15 +178,14 @@ class NoodleMemoryDatabase(object):
 
     def remove_block(self, block):
         self.block_cache.pop((block.public_key, block.sequence_number), None)
-        self.linked_block_cache.pop((block.link_public_key, block.link_sequence_number), None)
 
     def get(self, public_key, sequence_number):
-        if public_key in self.block_time:
+        if public_key in self.block_cache and sequence_number in self.block_cache[public_key]:
             return self.block_cache[public_key][sequence_number]
         return None
 
     def get_all_blocks(self):
-        return self.block_cache.values()
+        return self.blocks.values()
 
     def get_number_of_known_blocks(self, public_key=None):
         if public_key:
@@ -192,8 +193,7 @@ class NoodleMemoryDatabase(object):
         return len(self.block_cache.keys())
 
     def contains(self, block):
-        return block.public_key in self.block_cache and block.sequence_number in self.block_cache[block.public_key] and \
-               block.hash in self.block_cache[block.public_key][block.sequence_number]
+        return block.hash in self.blocks
 
     def get_lastest_peer_frontier(self, peer_key):
         if peer_key in self.identity_chains:
@@ -205,65 +205,28 @@ class NoodleMemoryDatabase(object):
             return self.community_chains[com_key].frontier
         return None
 
-    def get_latest_blocks(self, public_key, limit=25, block_types=None):
-        latest_block = self.get_latest(public_key)
-        if not latest_block:
-            return []  # We have no latest blocks
-
-        blocks = [latest_block]
-        cur_seq = latest_block.sequence_number - 1
-        while cur_seq > 0:
-            cur_block = self.get(public_key, cur_seq)
-            if cur_block and (not block_types or cur_block.type in block_types):
-                blocks.append(cur_block)
-                if len(blocks) >= limit:
-                    return blocks
-            cur_seq -= 1
-
-        return blocks
-
-    def get_linked(self, block):
-        if (block.link_public_key, block.link_sequence_number) in self.block_cache:
-            return self.block_cache[(block.link_public_key, block.link_sequence_number)]
-        if (block.public_key, block.sequence_number) in self.linked_block_cache:
-            return self.linked_block_cache[(block.public_key, block.sequence_number)]
-        return None
-
-    def crawl(self, public_key, start_seq_num, end_seq_num, limit=100):
-        # TODO we assume only ourselves are crawled
-        blocks = []
-        orig_blocks_added = 0
-        for seq_num in xrange(start_seq_num, end_seq_num + 1):
-            if (public_key, seq_num) in self.block_cache:
-                block = self.block_cache[(public_key, seq_num)]
-                blocks.append(block)
-                orig_blocks_added += 1
-                linked_block = self.get_linked(block)
-                if linked_block:
-                    blocks.append(linked_block)
-
-            if orig_blocks_added >= limit:
-                break
-
-        return blocks
-
     def commit_block_times(self):
-        self.write_work_graph()
 
         if self.block_file:
             with open(self.block_file, "a") as t_file:
-                writer = csv.DictWriter(t_file, ['time', 'transaction', 'type', "seq_num", "link", 'from_id', 'to_id'])
+                writer = csv.DictWriter(t_file, ['time', 'transaction', 'type',
+                                                 'peer_id', "seq_num",
+                                                 'com_id', 'com_seq', "links", 'prevs'])
                 block_ids = list(self.block_time.keys())
                 for block_id in block_ids:
-                    block = self.block_cache[block_id]
+                    block = self.blocks[block_id]
                     time = self.block_time[block_id]
                     from_id = hexlify(block.public_key).decode()[-8:]
-                    to_id = hexlify(block.link_public_key).decode()[-8:]
+                    com_id = hexlify(block.com_id).decode()[-8:]
+
                     writer.writerow({"time": time, 'transaction': str(block.transaction),
                                      'type': block.type.decode(),
-                                     'seq_num': block.sequence_number, "link": block.link_sequence_number,
-                                     'from_id': from_id, 'to_id': to_id
-                                     })
+                                     'seq_num': block.sequence_number,
+                                     'peer_id': from_id,
+                                     'com_id': com_id,
+                                     "com_seq": block.com_seq_num,
+                                     'links': str(block.links),
+                                     'prevs': str(block.previous)})
                     self.block_time.pop(block_id)
 
     def commit(self, my_pub_key):
@@ -271,16 +234,10 @@ class NoodleMemoryDatabase(object):
         Commit all information to the original database.
         """
         if self.original_db:
-            my_blocks = [block for block in self.block_cache.values() if block.public_key == my_pub_key]
+            my_blocks = [self.blocks[b_hashes] for b_hashes in self.block_cache[my_pub_key].values()]
             for block in my_blocks:
                 self.original_db.add_block(block)
 
-    def write_work_graph(self):
-        if not self.working_directory or os.path.exists(self.working_directory):
-            nx.write_gpickle(self.work_graph, self.graph_path)
-
     def close(self):
-        self.write_work_graph()
-
         if self.original_db:
             self.original_db.close()

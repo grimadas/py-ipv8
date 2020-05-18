@@ -1,14 +1,35 @@
 from ipv8.attestation.backbone.datastore.utils import key_to_id, ranges, expand_ranges
 
 
+class ChainState:
+    """
+    Class to collapse the chain and validate on integrity of invariants
+    """
+    def __init__(self):
+        self.state = dict()
+
+    def add_block(self, block):
+        # Update the state
+        pass
+
+    def is_valid(self):
+        pass
+
+    def get_state(self):
+        return self.state
+
+
+
 class Chain:
     """
     Index class for chain to ensure that each peer will converge into a consistent chain log.
     """
 
-    def __init__(self, personal=True):
+    def __init__(self, chain_id, personal=True, num_frontiers_store=50):
         self.chain = dict()
         self.holes = set()
+
+        self.chain_id = chain_id
 
         self.inconsistencies = set()
         self.terminal = set()
@@ -17,6 +38,21 @@ class Chain:
         self.forward_pointers = dict()
         self.frontier = {'p': personal}
 
+        self.states = dict()
+        self.state_votes = dict()
+        self.num_front_store = num_frontiers_store
+
+    def is_state_consistent(self):
+        """
+        State should be 'consistent' if there no known holes and inconsistencies
+        """
+        return not self.inconsistencies and not self.holes
+
+    def add_state(self, state_name, chain_state):
+        self.states[state_name] = chain_state
+
+    def add_audit_proof(self):
+        pass
 
     def calc_terminal(self, current):
         terminal = set()
@@ -58,7 +94,27 @@ class Chain:
     def max_known_seq_num(self):
         return max(self.chain) if self.chain else 0
 
+    def clean_up_state_votes(self):
+        current_front = max(self.frontier['v'])[0]
+        for k in list(self.state_votes.keys()):
+            if current_front - max(k)[0] > self.num_front_store:
+                del self.state_votes[k]
+
+    def get_latest_max_votes(self):
+        return max(self.state_votes.items(), key=lambda x: len(x[1]))
+
+    def get_latest_votes(self):
+        return max(self.state_votes.items(), key=lambda x: max(x[0])[0])
+
     def reconcile(self, front):
+        if 'state' in front:
+            # persist state val
+            key = tuple(front['v'])
+            if key not in self.state_votes:
+                self.state_votes[key] = set()
+            # TODO: periodically clean this:
+            self.state_votes[key].add(front['state'])
+
         f_holes = expand_ranges(front['h']) if 'h' in front and front['h'] else set()
         max_front_seq = max(front['v'])[0] if 'v' in front and front['v'] else 0
 
@@ -112,3 +168,7 @@ class Chain:
             self.inconsistencies.remove((block_seq_num, block_hash))
 
         self._update_frontiers(block_links, block_seq_num, block_hash)
+
+        # Update all states
+        for s in self.states.values():
+            s.add_block(block)

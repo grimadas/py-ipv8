@@ -176,21 +176,18 @@ class NoodleBlock(object):
         self.hash = self.calculate_hash()
 
     @classmethod
-    def create(cls, block_type, transaction, database, public_key, com_id=None, links=None,
-               additional_info=None, fork_seq=None):
+    def create(cls, block_type, transaction, database, public_key,
+               com_id=None, links=None, fork_seq=None):
         """
-        Create an empty next block.
-        :param block_type: the type of the block to be constructed
-        :param transaction: the transaction to use in this block
-        :param database: the database to use as information source
-        :param public_key: the public key to use for this block
-        :param link: optionally create the block as a linked block to this block
-        :param additional_info: additional information, which has a higher priority than the
-               transaction when link exists
-        :param link_pk: the public key of the counterparty in this transaction
-        :param double_spend_seq: If is not none Will create a double spend block with
-        :return: A newly created block
-        @param links:
+        Create NoodleBlock
+        :param block_type: type of the block
+        :param transaction: transaction as a dictionary
+        :param database: local database with chains
+        :param public_key: public key of the block creator
+        :param com_id: id of the community which block is part of [optional]
+        :param links: Explicitly link with these blocks [optional]
+        :param fork_seq: Fork personal chain at this level [optional]
+        :return: NoodleBlock with given parameters
         """
         if fork_seq:
             blks = database.get(public_key, fork_seq)

@@ -3,22 +3,21 @@ The Noodle community.
 """
 import logging
 import random
-import struct
-from asyncio import Future, Queue, ensure_future, get_event_loop, sleep
+from asyncio import Future, Queue, ensure_future, sleep
 from binascii import hexlify, unhexlify
 from collections import deque
 from functools import wraps
+from hashlib import sha256
 from threading import RLock
 
 import orjson as json
 
 from ipv8.attestation.backbone.datastore.database import NoodleDB
 from ipv8.attestation.backbone.datastore.memory_database import NoodleMemoryDatabase
-from .block import ANY_COUNTERPARTY_PK, EMPTY_PK, GENESIS_SEQ, NoodleBlock, UNKNOWN_SEQ
-from .caches import AuditProofRequestCache, ChainCrawlCache, CrawlRequestCache, IntroCrawlTimeout, \
-    NoodleCrawlRequestCache, PingRequestCache, AuditRequestCache, CommunitySyncCache
-from .consts import FRONTIER_MSG, BLOCKS_REQ_MSG, COMMUNITY_CACHE
-from .datastore.utils import decode_frontier, encode_frontier, hex_to_int, expand_ranges
+from .block import EMPTY_PK, NoodleBlock
+from .caches import AuditProofRequestCache, PingRequestCache, CommunitySyncCache
+from .consts import *
+from .datastore.utils import decode_frontier, encode_frontier, hex_to_int
 from .listener import BlockListener
 from .payload import *
 from .settings import SecurityMode, NoodleSettings
@@ -29,14 +28,13 @@ from ...messaging.payload_headers import BinMemberAuthenticationPayload, GlobalT
 from ...peer import Peer
 from ...peerdiscovery.discovery import RandomWalk
 from ...peerdiscovery.network import Network
-from ...requestcache import RandomNumberCache, RequestCache
-from ...taskmanager import task
+from ...requestcache import RequestCache
 from ...util import maybe_coroutine, succeed
 
 
 def synchronized(f):
     """
-    Due to database inconsistencies, we can't allow multiple threads to handle a received_half_block at the same time.
+    Due to database inconsistencies, we can't allow multiple threads to handle a received_block at the same time.
     """
 
     @wraps(f)
@@ -54,6 +52,7 @@ class SubTrustCommunity(Community):
         self._prefix = b'\x00' + self.version + self.master_peer.mid
         self.personal = kwargs.pop('personal')
         super(SubTrustCommunity, self).__init__(*args, **kwargs)
+
 
 class NoodleBlockListener(BlockListener):
     """
@@ -93,6 +92,7 @@ class NoodleCommunity(Community):
 
         if not self.persistence:
             self.persistence = self.DB_CLASS(working_directory, db_name, self.my_peer.public_key.key_to_bin())
+
         self.relayed_broadcasts = set()
         self.relayed_broadcasts_order = deque()
         self.logger.debug("The Noodle community started with Public Key: %s",
@@ -106,17 +106,20 @@ class NoodleCommunity(Community):
 
         # TODO: revisit queues
         # Block queues
-        self.transfer_queue = Queue()
-        self.transfer_queue_task = ensure_future(self.evaluate_transfer_queue())
+        self.transaction_queue = Queue()
+        self.transaction_queue_task = ensure_future(self.evaluate_transfer_queue())
+
         self.incoming_block_queue = Queue()
         self.incoming_block_queue_task = ensure_future(self.evaluate_incoming_block_queue())
+
         self.audit_response_queue = Queue()
         self.audit_response_queue_task = ensure_future(self.evaluate_audit_response_queue())
 
         self.mem_db_flush_lc = None
-        self.transfer_lc = None
+        self.transaction_lc = None
 
-        self.pex = {}
+        self.interest = dict()
+        self.pex = dict()
         self.bootstrap_master = None
         self.proof_requests = {}
 
@@ -161,6 +164,8 @@ class NoodleCommunity(Community):
             if self.persistence.get_balance(my_id) <= 0:
                 self.mint(self.settings.initial_mint_value)
 
+    def add_interest(self):
+        pass
 
     # ----- SubTrust Community routines ------
     def subscribe_to_community(self, community_master_peer, personal=False):
@@ -180,7 +185,7 @@ class NoodleCommunity(Community):
             community = SubTrustCommunity(self.my_peer, self.ipv8.endpoint, Network(),
                                           master_peer=community_master_peer,
                                           max_peers=self.settings.max_peers_subtrust,
-                                          personal = personal)
+                                          personal=personal)
 
             self.ipv8.overlays.append(community)
             self.pex[community_master_peer.mid] = community
@@ -226,9 +231,27 @@ class NoodleCommunity(Community):
                                                                   delay=random.random(),
                                                                   interval=sync_time)
 
+    @synchronized
     def gossip_sync_task(self, community_id):
         frontier = self.persistence.get_frontier(community_id)
+        state = self.persistence.get_latest_state(community_id) \
+            if self.persistence.is_state_consistent(community_id) else None
+        # TODO: include option to include even broken state
         if frontier:
+            # sign state => sign and send hash
+            if state:
+                # TODO: what hash might work here?
+                state_blob = json.dumps(state)
+                state_hash = sha256(state_blob).digest()
+                signature = default_eccrypto.create_signature(self.my_peer.key, state_hash)
+                # Prepare for send
+                my_id = hexlify(self.my_peer.public_key.key_to_bin()).decode()
+                signature = hexlify(signature).decode()
+                state_hash = hexlify(state_hash).decode()
+
+                signed_state = (my_id, signature, state_hash)
+                frontier['state'] = signed_state
+
             peer_set = self.pex[community_id].get_peers()
             self.send_frontier(community_id, frontier, peer_set)
 
@@ -279,7 +302,6 @@ class NoodleCommunity(Community):
         blocks = self.persistence.get_blocks_by_request(chain_id, blocks_request)
         self.send_multi_blocks(source_address, chain_id, blocks)
 
-
     def send_multi_blocks(self, address, chain_id, blocks):
         full_payload = list()
         for b in blocks:
@@ -288,7 +310,7 @@ class NoodleCommunity(Community):
         global_time = self.claim_global_time()
         dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
 
-        packet = self._ez_pack(self._prefix, 1, [dist, full_payload], False)
+        packet = self._ez_pack(self._prefix, MUTLI_BLOCKS_MSG, [dist, full_payload], False)
         self.endpoint.send(address, packet)
 
     @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, BlockResponsePayload)
@@ -297,17 +319,11 @@ class NoodleCommunity(Community):
         for b in blocks:
             self.received_block(source_address, dist, b)
 
-
-    def trustchain_sync(self, community_id):
-        self.logger.info("Sync for the info peer with mid %s", hexlify(community_id))
-        pass
-
     def get_peer(self, pub_key):
         for peer in self.get_peers():
             if peer.public_key.key_to_bin() == pub_key:
                 return peer
         return None
-
 
     # -------- Ping Functions -------------
     async def ping(self, peer):
@@ -414,12 +430,12 @@ class NoodleCommunity(Community):
         if address:
             self.logger.debug("Sending block to (%s:%d) (%s)", address[0], address[1], block)
             payload = BlockPayload.from_block(block).to_pack_list()
-            packet = self._ez_pack(self._prefix, 1, [dist, payload], False)
+            packet = self._ez_pack(self._prefix, BLOCK_MSG, [dist, payload], False)
             self.endpoint.send(address, packet)
         else:
             self.logger.debug("Broadcasting block %s", block)
             payload = BlockBroadcastPayload.from_half_block(block, ttl).to_pack_list()
-            packet = self._ez_pack(self._prefix, 5, [dist, payload], False)
+            packet = self._ez_pack(self._prefix, BLOCK_CAST_MSG, [dist, payload], False)
 
             if address_set:
                 f = min(len(address_set), self.settings.broadcast_fanout)
@@ -433,96 +449,31 @@ class NoodleCommunity(Community):
                 self.endpoint.send(p, packet)
             self._add_broadcasted_blockid(block.block_id)
 
-    def self_sign_block(self, block_type=b'unknown', transaction=None):
-        return self.sign_block(self.my_peer, block_type=block_type, transaction=transaction)
-
     @synchronized
-    def sign_block(self, peer, public_key=EMPTY_PK, block_type=b'unknown', transaction=None, linked=None,
-                   additional_info=None, double_spend_block=None, from_peer=None, from_peer_seq_num=None):
-        """
-        Create, sign, persist and send a block signed message
-        :param peer: The peer with whom you have interacted, as a IPv8 peer
-        :param public_key: The public key of the other party you transact with
-        :param block_type: The type of the block to be constructed, as a string
-        :param transaction: A string describing the interaction in this block
-        :param linked: The block that the requester is asking us to sign
-        :param additional_info: Stores additional information, on the transaction
-        :param double_spend_block: Number of block if you want to double sign
-        :param from_peer:  Optional parameter for conditional chain backbone
-        :param from_peer_seq_num: Optional parameter for conditional chain backbone
-        """
-        # NOTE to the future: This method reads from the database, increments and then writes back. If in some future
-        # this method is allowed to execute in parallel, be sure to lock from before .create up to after .add_block
-
-        # In this particular case there must be an implicit transaction due to the following assert
-        assert peer is not None or peer is None and linked is None and public_key == ANY_COUNTERPARTY_PK, \
-            "Peer, linked block should not be provided when creating a no counterparty source block. Public key " \
-            "should be that reserved for any counterpary."
-        assert transaction is None and linked is not None or transaction is not None and linked is None, \
-            "Either provide a linked block or a transaction, not both %s, %s" % (peer, self.my_peer)
-        assert (additional_info is None or linked is not None
-                and transaction is None), \
-            "Either no additional info is provided or one provides it for a linked block"
-        assert (linked is None or linked.link_public_key == self.my_peer.public_key.key_to_bin()
-                or linked.link_public_key == ANY_COUNTERPARTY_PK), "Cannot counter sign block not addressed to self"
-        assert linked is None or linked.link_sequence_number == UNKNOWN_SEQ, \
-            "Cannot counter sign block that is not a request"
-        assert transaction is None or isinstance(transaction, dict), "Transaction should be a dictionary"
-        assert additional_info is None or isinstance(additional_info, dict), "Additional info should be a dictionary"
-
-        # self.persistence_integrity_check()
-
-        # if linked and linked.link_public_key != ANY_COUNTERPARTY_PK:
-        #     block_type = linked.type
-
-        block = self.get_block_class(block_type).create(block_type, transaction, self.persistence,
-                                                        self.my_peer.public_key.key_to_bin(),
-                                                        link=linked, additional_info=additional_info,
-                                                        link_pk=public_key,
-                                                        double_spend_seq=double_spend_block)
+    def sign_block(self, peer, public_key=EMPTY_PK, block_type=b'unknown',
+                   transaction=None, com_id=None, links=None, fork_seq=None):
+        if not transaction:
+            transaction = dict()
+        block = NoodleBlock.create(block_type, transaction,
+                                   self.persistence, self.my_peer.public_key.key_to_bin(),
+                                   com_id, links, fork_seq)
         block.sign(self.my_peer.key)
-
-        # validation = block.validate(self.persistence)
-        # self.logger.info("Signed block to %s (%s) validation result %s",
-        #                  hexlify(block.link_public_key)[-8:], block, validation)
-        # if validation[0] != ValidationResult.partial_next and validation[0] != ValidationResult.valid:
-        #     self.logger.error("Signed block did not validate?! Result %s", repr(validation))
-        #     return fail(RuntimeError("Signed block did not validate."))
-
         if not self.persistence.contains(block):
             self.persistence.add_block(block)
             self.notify_listeners(block)
 
-        if peer == self.my_peer:
+        if peer == self.my_peer or not peer:
             # We created a self-signed block / initial claim, send to the neighbours
             if block.type not in self.settings.block_types_bc_disabled and not self.settings.is_hiding:
                 self.send_block(block)
-            return succeed((block, None)) if public_key == ANY_COUNTERPARTY_PK else succeed((block, linked))
-
-        # This is a source block with no counterparty
-        if not peer and public_key == ANY_COUNTERPARTY_PK:
-            if block.type not in self.settings.block_types_bc_disabled:
-                self.send_block(block)
-            return succeed((block, None))
-
-        # If there is a counterparty to sign, we send it
-        self.send_block(block, address=peer.address)
-
-        # We broadcast the block in the network if we initiated a transaction
-        if not linked:
-            # We keep track of this outstanding sign request.
-            sign_future = Future()
-            # Check if we are waiting for this signature response
-            block_id_int = int(hexlify(block.block_id), 16) % 100000000
-            if not self.request_cache.has(u'sign', block_id_int):
-                self.request_cache.add(HalfBlockSignCache(self, block, sign_future, peer.address,
-                                                          from_peer=from_peer, seq_num=from_peer_seq_num))
-                return sign_future
-            return succeed((block, None))
+            return succeed(block)
         else:
-            # This is a claim block, send block to the neighbours
-            # self.send_block_pair(linked, block)
-            return succeed((linked, block))
+            # There is a counterparty to sign => Send to the counterparty first
+            self.send_block(block, address=peer.address)
+            # TODO: send to the community?
+
+    def self_sign_block(self, block_type=b'unknown', transaction=None, com_id=None, links=None, fork_seq=None):
+        return self.sign_block(self.my_peer, block_type, transaction, com_id, links, fork_seq)
 
     @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, BlockPayload)
     async def received_block(self, source_address, dist, payload):
@@ -538,12 +489,12 @@ class NoodleCommunity(Community):
             block_info = await self.incoming_block_queue.get()
             peer, block = block_info
 
-            await self.process_half_block(block, peer)
+            await self.process_block(block, peer)
             await sleep(self.settings.block_queue_interval / 1000)
 
     @synchronized
     @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, BlockBroadcastPayload)
-    def received_half_block_broadcast(self, source_address, dist, payload):
+    def received_block_broadcast(self, source_address, dist, payload):
         """
         We received a half block, part of a broadcast. Disseminate it further.
         """
@@ -552,33 +503,7 @@ class NoodleCommunity(Community):
         self.validate_persist_block(block, peer)
 
         if block.block_id not in self.relayed_broadcasts and payload.ttl > 1:
-            if self.settings.use_informed_broadcast:
-                fanout = self.settings.broadcast_fanout - 1
-                self.informed_send_block(block, ttl=payload.ttl, fanout=fanout)
-            else:
-                self.send_block(block, ttl=payload.ttl)
-
-    def check_local_state_wrt_block(self, block):
-        if block.type == b'spend':
-            # Verify the block
-            peer_id = self.persistence.key_to_id(block.public_key)
-            p = self.persistence.key_to_id(block.link_public_key)
-            seq_num = block.sequence_number
-            total_value = float(block.transaction["total_spend"])
-        elif block.type == b'claim':
-            peer_id = self.persistence.key_to_id(block.link_public_key)
-            p = self.persistence.key_to_id(block.public_key)
-            seq_num = block.link_sequence_number
-            total_value = float(block.transaction["total_spend"])
-        else:
-            # Ignore for now
-            return
-        # There is status from the peer that is higher than this block, and the relationship is not known
-        balance = self.persistence.get_total_pairwise_spends(peer_id, p)
-        known_seq_num = self.persistence.get_last_pairwise_spend_num(peer_id, p)
-        if self.persistence.get_peer_proofs(peer_id, seq_num) \
-                and (balance < total_value or known_seq_num < seq_num):
-            self.trigger_security_alert(peer_id, ["Hiding peer " + str(p)])
+            self.send_block(block, ttl=payload.ttl)
 
     def validate_persist_block(self, block, peer=None):
         """
@@ -586,19 +511,9 @@ class NoodleCommunity(Community):
         :param block: The block to validate and persist.
         :return: [ValidationResult]
         """
-        validation = block.validate(self.persistence)
-        self.network.known_network.add_edge(block.public_key, block.link_public_key)
-        if not self.settings.ignore_validation and validation[0] == ValidationResult.invalid:
-            pass
-        else:
-            self.notify_listeners(block)
-            if not self.persistence.contains(block):
-                # verify the block according to the previously received status
-                self.check_local_state_wrt_block(block)
-                self.persistence.add_block(block)
-                if peer:
-                    self.persistence.add_peer(peer)
-        return validation
+        if not self.persistence.contains(block):
+            self.persistence.add_block(block)
+        # TODO: add local state update + invariants validation
 
     def notify_listeners(self, block):
         """
@@ -616,250 +531,83 @@ class NoodleCommunity(Community):
             listener.received_block(block)
 
     @synchronized
-    async def process_half_block(self, blk, peer, status=None, audit_proofs=None):
+    async def process_block(self, blk: NoodleBlock, peer, status=None, audit_proofs=None):
         """
         Process a received half block.
         """
-        validation = self.validate_persist_block(blk, peer)
-        self.logger.info("Block validation result %s, %s, (%s)", validation[0], validation[1], blk)
-        if not self.settings.ignore_validation and validation[0] == ValidationResult.invalid:
-            raise RuntimeError(f"Block could not be validated: {validation[0]}, {validation[1]}")
+        self.validate_persist_block(blk, peer)
+        # TODO: Add reaction to the block
         if status and audit_proofs:
-            # validate status and audit proofs for the block
+            # TODO: revisit the audit proofs reaction
             if not self.validate_audit_proofs(status, audit_proofs, blk):
                 raise RuntimeError("Block proofs are not valid, refusing to sign: %s", blk)
-
-        # Check if we are waiting for this signature response
-        link_block_id_int = int(hexlify(blk.linked_block_id), 16) % 100000000
-        if self.request_cache.has('sign', link_block_id_int):
-            cache = self.request_cache.pop('sign', link_block_id_int)
-
-            # We cannot guarantee that we're on the event loop thread.
-            get_event_loop().call_soon_threadsafe(cache.sign_future.set_result,
-                                                  (blk, self.persistence.get_linked(blk)))
-
-            # We are waiting for a conditional transaction
-            if 'condition' in blk.transaction and cache.from_peer:
-                # We need to answer to prev peer in the chain
-                if 'proof' in blk.transaction:
-                    orig_blk = self.persistence.get(cache.from_peer.public_key.key_to_bin(), cache.seq_num)
-                    new_tx = orig_blk.transaction
-                    new_tx['proof'] = blk.transaction['proof']
-                    return self.sign_block(cache.from_peer, linked=orig_blk, block_type=b'claim',
-                                           additional_info=new_tx)
-                else:
-                    self.logger.error("Got conditional block without a proof %s ", cache.from_peer)
-                    raise RuntimeError("Block could not be validated: %s, %s" % (validation[0], validation[1]))
-
-        linked = self.persistence.get_linked(blk)
-        if blk.link_sequence_number == UNKNOWN_SEQ and blk.link_public_key == self.my_peer.public_key.key_to_bin() and linked:
-            # Send the already created block back
-            self.send_block(linked, address=peer.address)
-
-        # Is this a request, addressed to us, and have we not signed it already?
-        if (blk.link_sequence_number != UNKNOWN_SEQ
-                or blk.link_public_key != self.my_peer.public_key.key_to_bin()
-                or linked is not None):
-            return
-
-        self.logger.info("Received request block addressed to us (%s)", blk)
-
         try:
             should_sign = await maybe_coroutine(self.should_sign, blk)
         except Exception as e:
             self.logger.error("Error while determining whether to sign (error: %s)", e)
             return
-
         if not should_sign:
             self.logger.info("Not signing block %s", blk)
             return
-
-        peer_id = self.persistence.key_to_id(blk.public_key)
-        if blk.type == b'spend':
-            # Request proofs from the peer if:
-            #  1) If estimated balance less than zero
-            #  2) If no proofs attached, no recent local proofs and depending on risk
-            if self.persistence.get_balance(peer_id) < 0 or \
-                    (not status and not audit_proofs and not self.persistence.get_peer_proofs(peer_id,
-                                                                                              blk.sequence_number) and
-                     random.random() > self.settings.risk):
-                status_and_proofs = await self.validate_spend(blk, peer)
-                return await self.process_half_block(blk, peer, *status_and_proofs)
-            if 'condition' in blk.transaction:
-                pub_key = unhexlify(blk.transaction['condition'])
-                if self.my_peer.public_key.key_to_bin() != pub_key:
-                    # This is a multi-hop conditional transaction, relay to next peer
-                    # TODO: add to settings fees
-                    fees = 0
-                    spend_value = blk.transaction['value'] - fees
-                    new_tx = blk.transaction
-                    val = self.prepare_spend_transaction(pub_key, spend_value)
-                    if not val:
-                        # need to mint new values
-                        mint = self.prepare_mint_transaction()
-                        return addCallback(self.self_sign_block(block_type=b'claim', transaction=mint),
-                                           lambda _: self.process_half_block(blk, peer))
-                    next_peer, added = val
-                    new_tx.update(added)
-                    return self.sign_block(next_peer, next_peer.public_key.key_to_bin(), transaction=new_tx,
-                                           block_type=blk.type, from_peer=peer,
-                                           from_peer_seq_num=blk.sequence_number)
-                else:
-                    # Conditional block that terminates at our peer: add additional_info and send claim
-                    sign = blk.crypto.create_signature(self.my_peer.key, blk.transaction['nonce'].encode())
-                    new_tx = blk.transaction
-                    new_tx['proof'] = hexlify(sign).decode()
-                    return self.sign_block(peer, linked=blk, block_type=b'claim', additional_info=new_tx)
-
-            self.sign_block(peer, linked=blk, block_type=b'claim')
-
-    async def validate_spend(self, spend_block, peer):
-        from_peer = self.persistence.key_to_id(spend_block.public_key)
-        crawl_id = self.persistence.id_to_int(from_peer)
-        cache = self.request_cache.get(u"proof-request", crawl_id)
-        if not cache:
-            # Need to get more information from the peer to verify the claim
-            self.logger.info("Requesting the status and audit] proofs %s:%d from peer %s:%d",
-                             crawl_id, spend_block.sequence_number, peer.address[0], peer.address[1])
-            except_pack = json.dumps(list())
-            if self.settings.security_mode == SecurityMode.VANILLA:
-                future = self.send_peer_crawl_request(crawl_id, peer, spend_block.sequence_number, except_pack)
-            else:
-                future = self.send_audit_proofs_request(peer, spend_block.sequence_number, crawl_id)
-            return await future
-        else:
-            future = Future()
-            cache.futures.append(future)
-            return await future
-
-    def verify_audit(self, status, audit):
-        # This is a claim of a conditional transaction
-        pub_key = default_eccrypto.key_from_public_bin(unhexlify(audit[0]))
-        sign = unhexlify(audit[1])
-
-        return default_eccrypto.is_valid_signature(pub_key, status, sign)
-
-    def trigger_security_alert(self, peer_id, errors):
-        tx = {'errors': errors, 'peer': peer_id}
-        # TODO attach proof to transaction
-        self.self_sign_block(block_type=b'alert', transaction=tx)
-
-    def validate_audit_proofs(self, raw_status, raw_audit_proofs, block):
-        self.logger.info("Received audit proofs for block %s", block)
-        if self.settings.security_mode == SecurityMode.VANILLA:
-            return True
-
-        status = json.loads(raw_status)
-        audit_proofs = json.loads(raw_audit_proofs)
-
-        for v in audit_proofs.items():
-            if not self.verify_audit(raw_status, v):
-                self.logger.error("Audit did not validate %s %s", v, status)
-
-        peer_id = self.persistence.key_to_id(block.public_key)
-        # Put audit status into the local db
-        result = self.verify_peer_status(peer_id, status)
-        if result == ValidationResult.invalid:
-            # Alert: Peer is provably hiding a transaction
-            self.logger.error("Peer is hiding transactions %s", result.errors)
-            self.trigger_security_alert(peer_id, result.errors)
-            return False
-
-        res = self.persistence.dump_peer_status(peer_id, status)
-        self.persistence.add_peer_proofs(peer_id, status['seq_num'], status, raw_audit_proofs)
-        return res
-
-    def finalize_audits(self, audit_seq, status, audits):
-        if not audits:
-            self.logger.info("We did not receive any audit proof from others - not finalizing this audit!")
-            return
-
-        self.logger.info("Audit with sequence number %d finalized (audits: %d)", audit_seq, len(audits))
-        full_audit = dict(audits)
-        proofs = json.dumps(full_audit)
-        # Update database audit proofs
-        my_id = self.persistence.key_to_id(self.my_peer.public_key.key_to_bin())
-        self.persistence.add_peer_proofs(my_id, audit_seq, status, proofs)
-        # Get peers requested
-        processed_ids = set()
-        responses_to_send = []
-        for seq, peers_val in list(self.proof_requests.items()):
-            if seq <= audit_seq:
-                for p, audit_id in peers_val:
-                    if (p, audit_id) not in processed_ids:
-                        responses_to_send.append((p, audit_id, proofs, status))
-                        processed_ids.add((p, audit_id))
-                del self.proof_requests[seq]
-
-        for p, audit_id, proofs, status in responses_to_send:
-            self.audit_response_queue.put_nowait((p, audit_id, proofs, status))
-
-    async def trustchain_active_sync(self, community_mid):
-        # choose the peers
-        self.logger.info("Active Sync asking in the community %s", hexlify(community_mid).decode())
-
-        # Get own last block in the community
-        peer_key = self.my_peer.public_key.key_to_bin()
-        block = self.persistence.get_latest(peer_key)
-        if not block:
-            self.logger.info("Peer has no block for audit. Skipping audit for now.")
-            return
-
-        # Get the peer list for the community
-        peer_list = self.pex[community_mid].get_peers()
-
-        # Exclude crawlers - don't ask them for audits
-        peer_list = [peer for peer in peer_list if hexlify(peer.public_key.key_to_bin()) not in self.settings.crawlers]
-
-        seq_num = block.sequence_number
-        seed = peer_key + bytes(seq_num)
-        selected_peers = self.choose_community_peers(peer_list, seed, min(self.settings.com_size, len(peer_list)))
-        if not selected_peers:
-            self.logger.info("There are no peers in the community to ask for an audit, skipping audit for now.")
-            return
-
-        # Do we already have audit proofs for this sequence number? If so, don't ask for more proofs
-        my_id = self.persistence.key_to_id(peer_key)
-        if self.persistence.get_peer_proofs(my_id, seq_num):
-            self.logger.info("Skipping audit since we already have proofs for our last block.")
-            return
-
-        peer_status = self.form_peer_status_response(peer_key, selected_peers)
-        # Send an audit request for the block + seq num
-        # Now we send status + seq_num
-        crawl_id = self.persistence.id_to_int(self.persistence.key_to_id(peer_key))
-        # Check if there are active audit requests for this peer
-        if not self.request_cache.get(u'audit', crawl_id):
-            audit_future = Future()
-            self.request_cache.add(AuditRequestCache(self, crawl_id, audit_future,
-                                                     total_expected_audits=len(selected_peers)))
-            self.logger.info("Requesting an audit for sequence number %d from %d peers", seq_num, len(selected_peers))
-            for peer in selected_peers:
-                self.send_audit_request(peer, crawl_id, peer_status)
-            # when enough audits received, finalize
-            audits = await audit_future
-            self.finalize_audits(seq_num, peer_status, audits)
 
     def choose_community_peers(self, com_peers, current_seed, commitee_size):
         rand = random.Random(current_seed)
         return rand.sample(com_peers, commitee_size)
 
-    async def send_audit_proofs_request(self, peer, seq_num, audit_id):
+    # ------ State-based synchronization -------------
+    async def state_sync(self, community_id, state_name=None):
+        """
+        Synchronise latest accumulated state in a community.
+        Note that it might not work for all use cases
+        """
+        state = self.persistence.get_latest_state(community_id, state_name)
+        # Get the peer list for the community
+        peer_list = self.pex[community_id].get_peers()
+
+    def verify_audit(self, status, audit):
+        # This is a claim of a conditional transaction
+        pub_key = default_eccrypto.key_from_public_bin(unhexlify(audit[0]))
+        sign = unhexlify(audit[1])
+        return default_eccrypto.is_valid_signature(pub_key, status, sign)
+
+    def trigger_security_alert(self, peer_id, errors, com_id=None):
+        tx = {'errors': errors, 'peer': peer_id}
+        # TODO attach proof to transaction
+        self.self_sign_block(block_type=b'alert', transaction=tx, com_id=com_id)
+
+    def validate_audit_proofs(self, raw_status, raw_audit_proofs, block):
+        # TODO: implement
+        return True
+
+    def finalize_audits(self, audit_seq, status, audits):
+        # TODO: implement
+        pass
+
+    # ----------- Auditing chain state wrp invariants ----------------
+
+    async def send_audit_proofs_request(self, audit_id, peer, chain_id, block_hash, state_name=None):
         """
         Request audit proofs for some sequence number from a specific peer.
+        For example: verify that peer has balance, has certain reputation etc.
+        :param audit_id: id for the cache and tracking
+        :param peer: who to send the audit request
+        :param chain_id: id of the chain that requires auditing
+        :param block_hash: Hash of the block in the chain. Acts as a time to which to validate the chain.
+        :param state_name: audit specific state. If none: all state values will be validated
         """
-        self._logger.debug("Sending audit proof request to peer %s:%d (seq num: %d, id: %s)",
-                           peer.address[0], peer.address[1], seq_num, audit_id)
+        self._logger.debug("Sending audit proof request to peer %s:%d (chain: %s)",
+                           peer.address[0], peer.address[1], chain_id)
         request_future = Future()
         cache = AuditProofRequestCache(self, audit_id)
         cache.futures.append(request_future)
         self.request_cache.add(cache)
 
         global_time = self.claim_global_time()
-        payload = AuditProofRequestPayload(seq_num, audit_id).to_pack_list()
+        val = json.dumps({'chain': chain_id, 'blk_hash': block_hash, 'state': state_name})
+        payload = AuditProofRequestPayload(audit_id, val).to_pack_list()
         dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
 
-        packet = self._ez_pack(self._prefix, 11, [dist, payload], False)
+        packet = self._ez_pack(self._prefix, AUDIT_PROOFS_REQ_MSG, [dist, payload], False)
         self.endpoint.send(peer.address, packet)
         return await request_future
 
@@ -867,8 +615,7 @@ class NoodleCommunity(Community):
     @lazy_wrapper_unsigned_wd(GlobalTimeDistributionPayload, AuditProofRequestPayload)
     def received_audit_proofs_request(self, source_address, dist, payload, data):
         # get the last collected audit proof and send it back
-        my_id = self.persistence.key_to_id(self.my_peer.public_key.key_to_bin())
-        pack = self.persistence.get_peer_proofs(my_id, int(payload.seq_num))
+        pack = self.persistence.get_peer_proofs(**json.loads(payload.value))
         if pack:
             seq_num, status, proofs = pack
             # There is an audit request peer can answer
@@ -987,15 +734,8 @@ class NoodleCommunity(Community):
         payload = AuditProofPayload(audit_id, audit_proofs).to_pack_list()
         dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
 
-        packet = self._ez_pack(self._prefix, 10, [dist, payload], False)
+        packet = self._ez_pack(self._prefix, AUDIT_PROOFS_MSG, [dist, payload], False)
         self.endpoint.send(address, packet)
-
-    @synchronized
-    @lazy_wrapper(GlobalTimeDistributionPayload, MintRequestPayload)
-    def received_mint_request(self, peer, dist, payload):
-        self._logger.info("Received mint request with value %d from peer %s", payload.mint_value, peer)
-        self.mint(payload.mint_value)
-        self.transfer(peer, payload.mint_value)
 
     def get_all_communities_peers(self):
         peers = set()
@@ -1005,385 +745,32 @@ class NoodleCommunity(Community):
                 peers.update(val)
         return peers
 
-    def verify_peer_status(self, peer_id, status):
-        result = ValidationResult()
-        if "seq_num" not in status or 'spends' not in status or 'claims' not in status:
-            # Ignore peer status if it is old/ or ill formed
-            result.state = ValidationResult.no_info
-            return result
+    def verify_chain_state(self, chain_id, status):
+        # TODO: implement
+        return True
 
-        # 1. Verify that peer included all known spenders
-        all_verified = True
-        for p in self.persistence.get_all_spend_peers(peer_id):
-            balance = self.persistence.get_total_pairwise_spends(peer_id, p)
-            seq_num = self.persistence.get_last_pairwise_spend_num(peer_id, p)
-            if balance > 0 and seq_num <= status['seq_num']:
-                if p not in status['spends'] or status['spends'][p][0] < balance:
-                    # Alert, peer is hiding my transaction
-                    result.err("Peer is hiding spend with peer {}".format(p))
-            else:
-                all_verified = False
-        if result.state != ValidationResult.invalid and not all_verified:
-            result.state = ValidationResult.partial
-        # TODO: 2. Verify that there are no unknown holes
-        return result
-
-    @synchronized
-    @lazy_wrapper(GlobalTimeDistributionPayload, PeerCrawlResponsePayload)
-    def received_peer_crawl_response(self, peer, dist, payload):
-        cache = self.request_cache.get(u"noodle-crawl", payload.crawl_id)
-        if cache:
-            peer_id = self.persistence.int_to_id(payload.crawl_id)
-            prev_balance = self.persistence.get_balance(peer_id)
-            self.logger.info("Dump chain for %s, balance before is %s", peer_id, prev_balance)
-            status = json.loads(payload.chain)
-            result = self.verify_peer_status(peer_id, status)
-            if result == ValidationResult.invalid:
-                # Alert: Peer is provably hiding a transaction
-                self.logger.error("Peer is hiding transactions  %s", result.errors)
-                self.trigger_security_alert(peer_id, result.errors)
-                cache.received_empty_response()
-            else:
-                res = self.persistence.dump_peer_status(peer_id, status)
-                seq_num = status['seq_num']
-                self.persistence.add_peer_proofs(peer_id, seq_num, status, None)
-                if not res:
-                    self.logger.error("Status is ill-formed %s", status)
-                after_balance = self.persistence.get_balance(peer_id)
-                self.logger.info("Dump chain for %s, balance after is %s", peer_id, after_balance)
-                if after_balance < 0:
-                    self.logger.error("Balance is still negative! %s", status)
-                cache.received_empty_response()
-
-    def send_peer_crawl_response(self, peer, crawl_id, chain):
-        """
-        Send chain to response for the peer crawl
-        """
-        self._logger.info("Sending peer crawl response to peer %s:%d", peer.address[0], peer.address[1])
-        global_time = self.claim_global_time()
-        auth = BinMemberAuthenticationPayload(self.my_peer.public_key.key_to_bin()).to_pack_list()
-        payload = PeerCrawlResponsePayload(crawl_id, chain).to_pack_list()
-        dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
-
-        packet = self._ez_pack(self._prefix, 9, [auth, dist, payload])
-        self.endpoint.send(peer.address, packet)
-
-    def form_peer_status_response(self, public_key, exception_peer_list=None):
-        status = self.persistence.get_peer_status(public_key)
-        if self.settings.is_hiding:
-            # Hide the top spend excluding the peer that asked it
-            except_peers = set()
-            for peer in exception_peer_list:
-                peer_id = self.persistence.key_to_id(peer.public_key.key_to_bin())
-                except_peers.add(peer_id)
-            hiding = False
-            for p in sorted(((v, k) for k, v in status['spends'].items()), reverse=True):
-                if p[1] not in except_peers:
-                    status['spends'].pop(p[1])
-                    hiding = True
-                    break
-            if hiding:
-                self.logger.warning("Hiding info in status")
-            return json.dumps(status)
-        return json.dumps(status)
-
-    @synchronized
-    @lazy_wrapper(GlobalTimeDistributionPayload, PeerCrawlRequestPayload)
-    def received_peer_crawl_request(self, peer, dist, payload):
-        # Need to convince peer with minimum number of blocks send
-        # Get latest pairwise blocks/ including self claims
-        my_key = self.my_peer.public_key.key_to_bin()
-        my_id = self.persistence.key_to_id(my_key)
-        peer_id = self.persistence.int_to_id(payload.crawl_id)
-        if peer_id != my_id:
-            self.logger.error("Peer requests not my peer status %s", peer_id)
-        s1 = self.form_peer_status_response(my_key, [peer])
-        self.logger.info("Received peer crawl from node %s for range, sending status len %s",
-                         hexlify(peer.public_key.key_to_bin())[-8:], len(s1))
-        self.send_peer_crawl_response(peer, payload.crawl_id, s1)
-
-    async def send_peer_crawl_request(self, crawl_id, peer, seq_num, pack_except):
-        """
-        Send a crawl request to a specific peer.
-        """
-        crawl_future = Future()
-        self.request_cache.add(NoodleCrawlRequestCache(self, crawl_id, crawl_future))
-        self.logger.info("Requesting balance proof for peer %s at seq num %d with id %d",
-                         hexlify(peer.public_key.key_to_bin())[-8:], seq_num, crawl_id)
-
-        global_time = self.claim_global_time()
-        auth = BinMemberAuthenticationPayload(self.my_peer.public_key.key_to_bin()).to_pack_list()
-        payload = PeerCrawlRequestPayload(seq_num, crawl_id, pack_except).to_pack_list()
-        dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
-
-        packet = self._ez_pack(self._prefix, 8, [auth, dist, payload])
-        self.endpoint.send(peer.address, packet)
-        return await crawl_future
-
-    def crawl_chain(self, peer, latest_block_num=0):
-        """
-        Crawl the whole chain of a specific peer.
-        :param latest_block_num: The latest block number of the peer in question, if available.
-        """
-        if self.request_cache.has("chaincrawl", ChainCrawlCache.get_number_for(peer)):
-            self.logger.debug("Skipping crawl of peer %s, another crawl is pending", peer)
-            return succeed(None)
-
-        crawl_future = Future()
-        cache = ChainCrawlCache(self, peer, crawl_future, known_chain_length=latest_block_num)
-        self.request_cache.add(cache)
-        get_event_loop().call_soon_threadsafe(ensure_future, self.send_next_partial_chain_crawl_request(cache))
-        return crawl_future
-
-    def crawl_lowest_unknown(self, peer, latest_block_num=None):
-        """
-        Crawl the lowest unknown block of a specific peer.
-        :param latest_block_num: The latest block number of the peer in question, if available
-        """
-        sq = self.persistence.get_lowest_sequence_number_unknown(peer.public_key.key_to_bin())
-        if latest_block_num and sq == latest_block_num + 1:
-            return []  # We don't have to crawl this node since we have its whole chain
-        return self.send_crawl_request(peer, peer.public_key.key_to_bin(), sq, sq)
-
-
-    def send_crawl_request(self, peer, public_key, start_seq_num, end_seq_num, for_half_block=None):
-        """
-        Send a crawl request to a specific peer.
-        """
-        crawl_id = for_half_block.hash_number if for_half_block else \
-            RandomNumberCache.find_unclaimed_identifier(self.request_cache, "crawl")
-        crawl_future = Future()
-        self.request_cache.add(CrawlRequestCache(self, crawl_id, crawl_future))
-        self.logger.info("Requesting crawl of node %s (blocks %d to %d) with id %d",
-                         hexlify(peer.public_key.key_to_bin())[-8:], start_seq_num, end_seq_num, crawl_id)
-
-        global_time = self.claim_global_time()
-        auth = BinMemberAuthenticationPayload(self.my_peer.public_key.key_to_bin()).to_pack_list()
-        payload = CrawlRequestPayload(public_key, start_seq_num, end_seq_num, crawl_id).to_pack_list()
-        dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
-
-        packet = self._ez_pack(self._prefix, 2, [auth, dist, payload])
-        self.endpoint.send(peer.address, packet)
-
-        return crawl_future
-
-    @task
-    async def perform_partial_chain_crawl(self, cache, start, stop):
-        """
-        Perform a partial crawl request for a specific range, when crawling a chain.
-        :param cache: The cache that stores progress regarding the chain crawl.
-        :param start: The sequence number of the first block to be requested.
-        :param stop: The sequence number of the last block to be requested.
-        """
-        if cache.current_request_range != (start, stop):
-            # We are performing a new request
-            cache.current_request_range = start, stop
-            cache.current_request_attempts = 0
-        elif cache.current_request_attempts == 3:
-            # We already tried the same request three times, bail out
-            self.request_cache.pop("chaincrawl", cache.number)
-            cache.crawl_future.set_result(None)
-            return
-
-        cache.current_request_attempts += 1
-        await self.send_crawl_request(cache.peer, cache.peer.public_key.key_to_bin(), start, stop)
-        await self.send_next_partial_chain_crawl_request(cache)
-
-    async def send_next_partial_chain_crawl_request(self, cache):
-        """
-        Send the next partial crawl request, if we are not done yet.
-        :param cache: The cache that stores progress regarding the chain crawl.
-        """
-        lowest_unknown = self.persistence.get_lowest_sequence_number_unknown(cache.peer.public_key.key_to_bin())
-        if cache.known_chain_length and cache.known_chain_length == lowest_unknown - 1:
-            # At this point, we have all the blocks we need
-            self.request_cache.pop("chaincrawl", cache.number)
-            cache.crawl_future.set_result(None)
-            return
-
-        if not cache.known_chain_length:
-            # Do we know the chain length of the crawled peer? If not, make sure we get to know this first.
-            blocks = await self.send_crawl_request(cache.peer, cache.peer.public_key.key_to_bin(), -1, -1)
-            if not blocks:
-                self.request_cache.pop("chaincrawl", cache.number)
-                cache.crawl_future.set_result(None)
-                return
-
-            cache.known_chain_length = blocks[0].sequence_number
-            await self.send_next_partial_chain_crawl_request(cache)
-            return
-
-        latest_block = self.persistence.get_latest(cache.peer.public_key.key_to_bin())
-        if not latest_block:
-            # We have no knowledge of this peer but we have the length of the chain.
-            # Simply send a request from the genesis block to the known chain length.
-            self.perform_partial_chain_crawl(cache, 1, cache.known_chain_length)
-            return
-        elif latest_block and lowest_unknown == latest_block.sequence_number + 1:
-            # It seems that we filled all gaps in the database; check whether we can do one final request
-            if latest_block.sequence_number < cache.known_chain_length:
-                self.perform_partial_chain_crawl(cache, latest_block.sequence_number + 1, cache.known_chain_length)
-            else:
-                self.request_cache.pop("chaincrawl", cache.number)
-                cache.crawl_future.set_result(None)
-            return
-
-        start, stop = self.persistence.get_lowest_range_unknown(cache.peer.public_key.key_to_bin())
-        self.perform_partial_chain_crawl(cache, start, stop)
-
-    @synchronized
-    @lazy_wrapper(GlobalTimeDistributionPayload, CrawlRequestPayload)
-    def received_crawl_request(self, peer, dist, payload):
-        self.logger.info("Received crawl request from node %s for range %d-%d",
-                         hexlify(peer.public_key.key_to_bin())[-8:], payload.start_seq_num, payload.end_seq_num)
-        start_seq_num = payload.start_seq_num
-        end_seq_num = payload.end_seq_num
-
-        # It could be that our start_seq_num and end_seq_num are negative. If so, convert them to positive numbers,
-        # based on the last block of ones chain.
-        if start_seq_num < 0:
-            last_block = self.persistence.get_latest(payload.public_key)
-            start_seq_num = max(GENESIS_SEQ, last_block.sequence_number + start_seq_num + 1) \
-                if last_block else GENESIS_SEQ
-        if end_seq_num < 0:
-            last_block = self.persistence.get_latest(payload.public_key)
-            end_seq_num = max(GENESIS_SEQ, last_block.sequence_number + end_seq_num + 1) \
-                if last_block else GENESIS_SEQ
-
-        blocks = self.persistence.crawl(payload.public_key, start_seq_num, end_seq_num,
-                                        limit=self.settings.max_crawl_batch)
-        total_count = len(blocks)
-
-        if total_count == 0:
-            global_time = self.claim_global_time()
-            response_payload = EmptyCrawlResponsePayload(payload.crawl_id).to_pack_list()
-            dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
-            packet = self._ez_pack(self._prefix, 7, [dist, response_payload], False)
-            self.endpoint.send(peer.address, packet)
-        else:
-            self.send_crawl_responses(blocks, peer, payload.crawl_id)
-
-    def send_crawl_responses(self, blocks, peer, crawl_id):
-        """
-        Answer a peer with crawl responses.
-        """
-        for ind, block in enumerate(blocks):
-            self.send_crawl_response(block, crawl_id, ind + 1, len(blocks), peer)
-        self.logger.info("Sent %d blocks", len(blocks))
-
-    @synchronized
-    def sanitize_database(self):
-        """
-        DANGER! USING THIS MAY CAUSE DOUBLE SPENDING IN THE NETWORK.
-                ONLY USE IF YOU KNOW WHAT YOU ARE DOING.
-
-        This method removes all of the invalid blocks in our own chain.
-        """
-        self.logger.error("Attempting to recover %s", self.DB_CLASS.__name__)
-        block = self.persistence.get_latest(self.my_peer.public_key.key_to_bin())
-        if not block:
-            # There is nothing to corrupt, we're at the genesis block.
-            self.logger.debug("No latest block found when trying to recover database!")
-            return
-        validation = self.validate_persist_block(block)
-        while not self.settings.ignore_validation and validation[0] != ValidationResult.partial_next \
-                and validation[0] != ValidationResult.valid:
-            # The latest block is invalid, remove it.
-            self.persistence.remove_block(block)
-            self.logger.error("Removed invalid block %d from our chain", block.sequence_number)
-            block = self.persistence.get_latest(self.my_peer.public_key.key_to_bin())
-            if not block:
-                # Back to the genesis
-                break
-            validation = self.validate_persist_block(block)
-        self.logger.error("Recovered database, our last block is now %d", block.sequence_number if block else 0)
-
-    def persistence_integrity_check(self):
-        """
-        Perform an integrity check of our own chain. Recover it if needed.
-        """
-        block = self.persistence.get_latest(self.my_peer.public_key.key_to_bin())
-        if not block:
-            return
-        validation = self.validate_persist_block(block)
-        if not self.settings.ignore_validation and validation[0] != ValidationResult.partial_next \
-                and validation[0] != ValidationResult.valid:
-            self.logger.error("Our chain did not validate. Result %s", repr(validation))
-            self.sanitize_database()
-
-    def send_crawl_response(self, block, crawl_id, index, total_count, peer):
-        self.logger.debug("Sending block for crawl request to %s (%s)", peer, block)
-
-        # Don't answer with any invalid blocks.
-        validation = self.validate_persist_block(block)
-        if not self.settings.ignore_validation and validation[0] == ValidationResult.invalid and total_count > 0:
-            # We send an empty block to the crawl requester if no blocks should be sent back
-            self.logger.error("Not sending crawl response, the block is invalid. Result %s", repr(validation))
-            self.persistence_integrity_check()
-            return
-
-        global_time = self.claim_global_time()
-        payload = CrawlResponsePayload.from_crawl(block, crawl_id, index, total_count).to_pack_list()
-        dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
-
-        packet = self._ez_pack(self._prefix, 3, [dist, payload], False)
-        self.endpoint.send(peer.address, packet)
-
-    @synchronized
-    @lazy_wrapper_unsigned_wd(GlobalTimeDistributionPayload, CrawlResponsePayload)
-    async def received_crawl_response(self, source_address, dist, payload, data):
-        await self.received_half_block(source_address, data[:-12])  # We cut off a few bytes to make it a BlockPayload
-
-        block = self.get_block_class(payload.type).from_payload(payload, self.serializer)
-        cache = self.request_cache.get("crawl", payload.crawl_id)
-        if cache:
-            cache.received_block(block, payload.total_count)
-
-    @lazy_wrapper_unsigned_wd(GlobalTimeDistributionPayload, EmptyCrawlResponsePayload)
-    def received_empty_crawl_response(self, source_address, dist, payload, data):
-        cache = self.request_cache.get("crawl", payload.crawl_id)
-        if cache:
-            self.logger.info("Received empty crawl response for crawl with ID %d", payload.crawl_id)
-            cache.received_empty_response()
-
-    def get_chain_length(self):
-        """
-        Return the length of your own chain.
-        """
-        latest_block = self.persistence.get_latest(self.my_peer.public_key.key_to_bin())
-        return 0 if not latest_block else latest_block.sequence_number
-
+    # ---- Introduction handshakes ----------------
     @synchronized
     def create_introduction_request(self, socket_address, extra_bytes=b''):
-        extra_bytes = struct.pack('>l', self.get_chain_length())
+        # TODO: add some information about interest and communities
+        # extra_bytes = struct.pack('>l', self.get_chain_length())
         return super(NoodleCommunity, self).create_introduction_request(socket_address, extra_bytes)
 
     @synchronized
     def create_introduction_response(self, lan_socket_address, socket_address, identifier,
                                      introduction=None, extra_bytes=b''):
-        extra_bytes = struct.pack('>l', self.get_chain_length())
+        # TODO: send your interest
         return super(NoodleCommunity, self).create_introduction_response(lan_socket_address, socket_address,
                                                                          identifier, introduction, extra_bytes)
 
     @synchronized
     def introduction_response_callback(self, peer, dist, payload):
-        chain_length = None
-        if payload.extra_bytes:
-            chain_length = struct.unpack('>l', payload.extra_bytes)[0]
-
-        if peer.address in self.network.blacklist:  # Do not crawl addresses in our blacklist (trackers)
-            return
-        self.form_subtrust_community(peer)
-
-        # Check if we have pending crawl requests for this peer
-        has_intro_crawl = self.request_cache.has("introcrawltimeout", IntroCrawlTimeout.get_number_for(peer))
-        has_chain_crawl = self.request_cache.has("chaincrawl", ChainCrawlCache.get_number_for(peer))
-        if has_intro_crawl or has_chain_crawl:
-            self.logger.debug("Skipping crawl of peer %s, another crawl is pending", peer)
-            return
-
+        # TODO: add interest connection
+        if self.settings.track_neighbours_chains:
+            self.subscribe_to_community(peer, personal=True)
         if self.settings.crawler:
-            self.crawl_chain(peer, latest_block_num=chain_length)
+            # TODO: add crawling functionality
+            pass
 
     async def unload(self):
         self.logger.debug("Unloading the Noodle Community.")

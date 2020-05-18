@@ -28,7 +28,7 @@ def decode_frontier(frontier: dict):
     """
     decoded = dict()
     for k, v in frontier:
-        if k == 'h' or k == 'm':
+        if k in ('h', 'm', 'state'):
             decoded[k] = v
         else:
             decoded[k] = decode_links(v)
@@ -41,7 +41,7 @@ def encode_frontier(frontier):
     """
     encoded = dict()
     for k, v in frontier:
-        if k == 'h' or k == 'm':
+        if k in ('h', 'm', 'state'):
             encoded[k] = v
         else:
             encoded[k] = encode_links(v)

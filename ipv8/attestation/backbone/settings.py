@@ -19,6 +19,9 @@ class NoodleSettings(object):
         # Time to verify received frontiers
         self.sync_timeout = 1.0
 
+        # Track personal chains of all neighbors
+        self.track_neighbours_chains = False
+
         # The set with block types that should not be broadcast
         self.block_types_bc_disabled = set()
 
