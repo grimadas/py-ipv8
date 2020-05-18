@@ -187,6 +187,7 @@ class CommunitySyncCache(NumberCache):
         return candidate
 
     def on_timeout(self):
+        # TODO convert this to a queue
         async def add_later():
             self.community.request_cache.add(CommunitySyncCache(self.community, self.chain_id))
         # Process all frontiers received

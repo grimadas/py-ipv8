@@ -142,48 +142,74 @@ class TestNoodleBlocks(asynctest.TestCase):
 
 class TestNoodleConsistency(asynctest.TestCase):
 
-    def test_block_no_previous(self):
+    def test_personal_chain_no_previous(self):
+        """
+        Scenario: a peer creates a block (seq = 2), linking to a missing block (seq = 1).
+        The frontier is now block 2.
+        """
         db = MockDatabase()
         block = TestBlock(previous={(1, '1234')})
         db.add_block(block)
         front = db.get_frontier(block.public_key)
+        # It's a frontier in a personal chain
+        self.assertTrue(front['p'])
         # Frontier should contain seq_num=2
         self.assertEqual(True, [2 in tuples for tuples in front['v']][0])
         # Frontier should indicate holes
         self.assertEqual([(1, 1)], front['h'])
 
-    def test_block_no_linked(self):
+    def test_community_chain_no_previous(self):
+        """
+        Scenario: a peer creates a block in some community, linking to a missing previous block.
+        """
         com_key = default_eccrypto.generate_key(u"curve25519").pub().key_to_bin()
         block = TestBlock(com_id=com_key, links={(1, '1234')})
         db = MockDatabase()
         db.add_block(block)
         front = db.get_frontier(com_key)
+        self.assertFalse(front['p'])
         # Frontier should contain seq_num=2
         self.assertEqual(True, [2 in tuples for tuples in front['v']][0])
         # Frontier should indicate holes
         self.assertEqual([(1, 1)], front['h'])
 
-    def test_block_conflict(self):
-        com_key = default_eccrypto.generate_key(u"curve25519").pub().key_to_bin()
-        block = TestBlock(com_id=com_key, links={(1, '1234')})
+    def test_personal_chain_inconsistency(self):
+        """
+        Scenario: a peer makes a block with seq = 1 (A), another block with seq = 2 that points to A,
+        and another block with seq = 2 that points to an unexisting block.
+        """
+        key = default_eccrypto.generate_key(u"curve25519")
         db = MockDatabase()
-        db.add_block(block)
-        front = db.get_frontier(com_key)
-        # Frontier should contain seq_num=2
-        self.assertEqual(True, [2 in tuples for tuples in front['v']][0])
-        # Frontier should indicate holes
-        self.assertEqual([(1, 1)], front['h'])
+        block1 = TestBlock(key=key)
+        db.add_block(block1)
+        block2 = TestBlock(key=key, previous={(1, key_to_id(block1.hash))})
+        db.add_block(block2)
+        block3 = TestBlock(key=key, previous={(1, '123445')})
+        db.add_block(block3)
+        front = db.get_frontier(block1.public_key)
+        # Frontier should contain the two blocks with seq 2
+        self.assertEqual(2, len(front['v']))
+        # Frontier should have no missing holes
+        self.assertFalse(front['h'])
 
-    def test_community_conflict(self):
+    def test_community_chain_inconsistency(self):
+        """
+        Scenario: a peer makes a community block (A) with com seq = 1, then someone else links to (A),
+        and then another peer links to an unexisting community block.
+        """
         com_key = default_eccrypto.generate_key(u"curve25519").pub().key_to_bin()
-        block = TestBlock(com_id=com_key, links={(1, '1234')})
         db = MockDatabase()
-        db.add_block(block)
+        block1 = TestBlock(com_id=com_key)
+        db.add_block(block1)
+        block2 = TestBlock(com_id=com_key, links={(1, key_to_id(block1.hash))})
+        db.add_block(block2)
+        block3 = TestBlock(com_id=com_key, links={(1, '12345')})
+        db.add_block(block3)
         front = db.get_frontier(com_key)
-        # Frontier should contain seq_num=2
-        self.assertEqual(True, [2 in tuples for tuples in front['v']][0])
-        # Frontier should indicate holes
-        self.assertEqual([(1, 1)], front['h'])
+        # Frontier should contain the two blocks with seq 2
+        self.assertEqual(2, len(front['v']))
+        # Frontier should have no missing holes
+        self.assertFalse(front['h'])
 
     def test_iter(self):
         """
@@ -199,14 +225,6 @@ class TestNoodleConsistency(asynctest.TestCase):
         # Check for duplicates
         self.assertEqual(len(block_keys) - 1, len(expected_keys))
         self.assertEqual(dict(block)['transaction']['id'], 42)
-
-    def test_hash_function(self):
-        """
-        Check if the hash() function returns the Block hash.
-        """
-        block = TestBlock()
-
-        self.assertEqual(block.__hash__(), block.hash)
 
     def test_reconcilation(self):
         db1 = MockDatabase()

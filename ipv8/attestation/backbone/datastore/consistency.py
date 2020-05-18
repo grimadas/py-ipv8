@@ -68,7 +68,6 @@ class Chain:
         self.inconsistencies.add((seq_num, exp_hash))
 
     def _update_frontiers(self, block_links, block_seq_num, block_hash):
-
         # New block received
         # 1. Does it fix some known holes?
         if block_seq_num in self.holes:
