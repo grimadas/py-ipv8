@@ -5,6 +5,7 @@ class ChainState:
     """
     Class to collapse the chain and validate on integrity of invariants
     """
+
     def __init__(self):
         self.state = dict()
 
@@ -17,7 +18,6 @@ class ChainState:
 
     def get_state(self):
         return self.state
-
 
 
 class Chain:
@@ -122,23 +122,18 @@ class Chain:
 
         # Front has blocks that peer is missing => Request from front these blocks
         f_diff = front_known_seq - peer_known_seq
-        p_diff = peer_known_seq - front_known_seq
-
         front_diff = {'m': ranges(f_diff)}
-        # Peer has blocks that front is missing =>  Send these blocks to front
-        peer_diff = {'m': ranges(p_diff)}
 
         if 'v' in front:
             # Front has blocks with conflicting hash => Request these blocks
-            front_diff['c'] = {(s, h) for s, h in front['v'] if s in self.chain and h not in self.chain}
+            front_diff['c'] = {(s, h) for s, h in front['v'] if s in self.chain and h not in self.chain[s]}
 
-            # Peer has new terminal nodes => Send these blocks
-            peer_diff['c'] = front['v'] - self.calc_terminal(front['v'])
+        for i in self.inconsistencies:
+            for t in self.calc_terminal([i]):
+                if t in front['v'] and t not in front['i'] and t[0] not in front['h']:
+                    front_diff['c'].add(i)
 
-        if 'i' in front:
-            peer_diff['c'].update({(s, h) for s, h in front['i'] if s in self.chain and h in self.chain})
-
-        return front_diff, peer_diff
+        return front_diff, None
 
     def add_block(self, block):
         block_links = block.previous if self.personal else block.links

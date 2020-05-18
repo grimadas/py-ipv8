@@ -132,10 +132,8 @@ class TestNoodleCommunityTwoNodes(TestNoodleCommunityBase):
         self.nodes[0].endpoint.open()
         self.nodes[1].endpoint.open()
 
-        await sleep(3)
+        await sleep(2) # This requires two rounds for reconciliation (each in 1 second)
 
-        frontier = self.nodes[0].overlay.persistence.get_frontier(self.community_id)
-        print(frontier)
-        frontier = self.nodes[1].overlay.persistence.get_frontier(self.community_id)
-        print(frontier)
-        assert False
+        frontier_a = self.nodes[0].overlay.persistence.get_frontier(self.community_id)
+        frontier_b = self.nodes[1].overlay.persistence.get_frontier(self.community_id)
+        self.assertEqual(frontier_a, frontier_b)
