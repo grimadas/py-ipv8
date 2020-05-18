@@ -162,6 +162,10 @@ class NoodleCommunity(Community):
             self.pex[community_master_peer.public_key.key_to_bin()] = community
 
             # Find other peers in the community
+            if community_master_peer.public_key.key_to_bin() in self.peer_subscriptions:
+                for address in self.peer_subscriptions[community_master_peer.public_key.key_to_bin()]:
+                    community.walk_to(address)
+
             if self.bootstrap_master:
                 self.logger.info('Finding other peers with a bootstrap masters')
                 for k in self.bootstrap_master:
@@ -725,8 +729,8 @@ class NoodleCommunity(Community):
         for community in communities:
             community_id = unhexlify(community)
             if community_id not in self.peer_subscriptions:
-                self.peer_subscriptions[community_id] = []
-            self.peer_subscriptions[community_id] = peer.public_key.key_to_bin()
+                self.peer_subscriptions[community_id] = set()
+            self.peer_subscriptions[community_id].add(peer.address)
 
             if community_id in self.pex:
                 self.pex[community_id].walk_to(peer.address)
