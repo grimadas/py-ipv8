@@ -1,10 +1,13 @@
 from asyncio import sleep
 
+import orjson
+
 from .test_consistency_chain import MockChainState
 from ...base import TestBase
 from ...mocking.ipv8 import MockIPv8
 from ....attestation.backbone.block import NoodleBlock
 from ....attestation.backbone.community import NoodleCommunity
+from ....attestation.backbone.datastore.utils import json_hash
 from ....attestation.backbone.settings import NoodleSettings
 from ....keyvault.crypto import default_eccrypto
 
@@ -117,6 +120,7 @@ class TestNoodleCommunityTwoNodes(TestNoodleCommunityBase):
         """
         Test a basic horizontal chain with conflicts. The final result should be a frontier consisting of two blocks.
         """
+
         await self.introduce_nodes()
 
         self.nodes[0].endpoint.close()
@@ -198,4 +202,38 @@ class TestNoodleCommunityThreeNodes(TestNoodleCommunityBase):
         self.assertEqual(val, val1)
         self.assertEqual(val1, val2)
 
-        print(self.nodes[1].overlay.persistence.get_state(self.community_id, 2))
+    async def test_state_messages_horizontal_chain(self):
+        for i in range(2):
+            self.nodes[i].overlay.persistence.add_chain_state(self.community_id, MockChainState('sum'))
+
+        self.nodes[0].overlay.sign_block(self.nodes[0].overlay.my_peer,
+                                         com_id=self.community_id, block_type=b'test', transaction={'id': 40})
+        self.nodes[1].overlay.sign_block(self.nodes[1].overlay.my_peer,
+                                         com_id=self.community_id, block_type=b'test', transaction={'id': 45})
+
+        await sleep(1)
+
+        self.nodes[1].overlay.sign_block(self.nodes[1].overlay.my_peer,
+                                         com_id=self.community_id, block_type=b'test', transaction={'id': 50})
+
+        await sleep(1)
+
+        # The frontier should be the last block created by peer 2
+        frontier = self.nodes[0].overlay.persistence.get_frontier(self.community_id)
+        self.assertEqual(len(list(frontier['v'])), 1)
+
+        frontier = self.nodes[1].overlay.persistence.get_frontier(self.community_id)
+        self.assertEqual(1, len(list(frontier['v'])))
+
+        val = self.nodes[1].overlay.persistence.get_state(self.community_id, 2)
+        val1 = self.nodes[0].overlay.persistence.get_state(self.community_id, 2)
+
+        # Node 2 request block from node 0
+        p_adr = self.nodes[1].overlay.my_peer.address
+        self.nodes[2].overlay.request_state(p_adr, self.community_id)
+
+        await sleep(0.2)
+        val2 = self.nodes[2].overlay.persistence.dumped_state.get(self.community_id).get(2)
+
+        self.assertEqual(val, val1)
+        self.assertEqual(val1, val2)

@@ -286,7 +286,7 @@ class MockChainState(ChainState):
         Initialize state when there no blocks
         @return: Fresh new state
         """
-        return {'total': 0, 'vals': (0, 0), 'front': list(), 'stakes': dict()}
+        return {'total': 0, 'vals': [0, 0], 'front': list(), 'stakes': dict()}
 
     def apply_block(self, prev_state, block):
         """
@@ -310,7 +310,7 @@ class MockChainState(ChainState):
 
         return {'total': total,
                 'front': [sh_hash],
-                'vals': (block.transaction['id'], delta, peer),
+                'vals': [block.transaction['id'], delta, peer],
                 'stakes': new_stakes
                 }
 
@@ -329,10 +329,10 @@ class MockChainState(ChainState):
         merged_state = dict()
         if not set(new_state['front']).issubset(set(old_state['front'])):
             # merge fronts
-            merged_state['front'] = list(set(old_state['front']) | set(new_state['front']))
+            merged_state['front'] = sorted(list(set(old_state['front']) | set(new_state['front'])))
             merged_state['total'] = old_state['total'] + abs(new_state['vals'][1])
-            merged_state['vals'] = (old_state['vals'][0] + new_state['vals'][1],
-                                    old_state['vals'][1] + new_state['vals'][1])
+            merged_state['vals'] = [old_state['vals'][0] + new_state['vals'][1],
+                                    old_state['vals'][1] + new_state['vals'][1]]
             p = new_state['vals'][2]
             delta = new_state['vals'][1]
             merged_state['stakes'] = dict()
@@ -341,6 +341,7 @@ class MockChainState(ChainState):
                 merged_state['stakes'][p] = abs(delta)
             else:
                 merged_state['stakes'][p] += abs(delta)
+            merged_state['stakes'] = sorted(merged_state['stakes'].items())
 
             return merged_state
         else:

@@ -134,6 +134,14 @@ class StateResponsePayload(KVPayload):
     pass
 
 
+class StateByHashRequestPayload(KVPayload):
+    pass
+
+
+class StateByHashResponsePayload(KVPayload):
+    pass
+
+
 class AuditRequestPayload(KVPayload):
     pass
 

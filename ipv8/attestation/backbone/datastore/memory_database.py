@@ -4,6 +4,7 @@ import time
 from binascii import hexlify
 from hashlib import sha1
 from typing import Optional
+from collections import defaultdict
 
 from ipv8.attestation.backbone.block import NoodleBlock, EMPTY_PK
 from ipv8.attestation.backbone.datastore.consistency import Chain
@@ -22,6 +23,9 @@ class NoodleMemoryDatabase(object):
         self.identity_chains = dict()
         self.community_chains = dict()
         self._temp_chain_states = dict()
+
+        # chain_id =>
+        self.dumped_state = defaultdict(dict)
 
         self.blocks = {}
         self.block_cache = {}
@@ -98,10 +102,13 @@ class NoodleMemoryDatabase(object):
         if chain:
             return chain.get_latest_max_votes()
 
+    def dump_state(self, chain_id, seq_num, state):
+        self.dumped_state[chain_id][seq_num] = state
+
     def get_state_by_hash(self, chain_id, state_hash):
         chain = self.get_chain(chain_id)
         state_ind = chain.get_state_by_hash(state_hash) if chain else None
-        return chain.get_state(state_ind[1], state_ind[0]) if state_ind else None
+        return (chain.get_state(state_ind), state_ind) if state_ind else None
 
     def get_chain(self, com_id) -> Optional[Chain]:
         if com_id not in self.community_chains and com_id not in self.identity_chains:
@@ -171,11 +178,6 @@ class NoodleMemoryDatabase(object):
             blocks.update({self.get_block_by_short_hash(sh) for sh in chain.chain[b_i]})
         for sn, sh in request['c']:
             val = self.get_block_by_short_hash(sh)
-            if not val:
-                print('Not found block! ', sh)
-                print(self.blocks)
-                print(self.get_chain(chain_id).chain)
-                print(self.get_chain(chain_id).frontier)
             blocks.add(val)
         return blocks
 

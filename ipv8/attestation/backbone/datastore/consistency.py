@@ -1,4 +1,5 @@
 from ipv8.attestation.backbone.datastore.utils import key_to_id, ranges, expand_ranges, json_hash
+from collections import defaultdict
 
 
 class ChainState:
@@ -82,7 +83,7 @@ class Chain:
             self.state_checkpoints[chain_state.name] = dict()
         init_state = chain_state.init_state()
         self.state_checkpoints[chain_state.name][0] = init_state
-        self.hash_to_state[json_hash(init_state)] = (chain_state.name, 0)
+        self.hash_to_state[json_hash(init_state)] = 0
 
     def add_audit_proof(self):
         pass
@@ -99,7 +100,6 @@ class Chain:
                     new_state = state.apply_block(prev_state, current_block)
                     merged_state = state.merge(known_state, new_state)
                     self.state_checkpoints[sn][s] = merged_state
-                    self.hash_to_state[json_hash(merged_state)] = (sn, s)
 
             if (s, h) not in self.forward_pointers:
                 # Terminal nodes achieved
@@ -218,5 +218,11 @@ class Chain:
             self.inconsistencies.remove((block_seq_num, block_hash))
 
         self._update_frontiers(block_links, block_seq_num, block_hash)
+
+        # Update has of the latest state
+        state_hash = json_hash(self.get_state(block_seq_num))
+        if state_hash not in self.hash_to_state:
+            self.hash_to_state[state_hash] = 0
+        self.hash_to_state[state_hash] = max(self.hash_to_state[state_hash], block_seq_num)
 
         self.clean_up()

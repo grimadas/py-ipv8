@@ -119,7 +119,11 @@ class NoodleCommunity(Community):
             chr(BLOCK_MSG): self.received_block,
             chr(BLOCK_CAST_MSG): self.received_block_broadcast,
             chr(FRONTIER_MSG): self.received_frontier,
-            chr(SUBS_MSG): self.received_subs_update
+            chr(SUBS_MSG): self.received_subs_update,
+            chr(STATE_REQ_MSG): self.received_state_request,
+            chr(STATE_RESP_MSG): self.received_state_response,
+            chr(STATE_BY_HASH_REQ_MSG): self.received_state_by_hash_request,
+            chr(STATE_BY_HASH_RESP_MSG): self.received_state_by_hash_response
         })
 
         # Enable the memory database
@@ -207,7 +211,7 @@ class NoodleCommunity(Community):
                     default_eccrypto.key_from_public_bin(unhexlify(p_id)),
                     unhexlify(hash_val),
                     unhexlify(sign)) for p_id, sign in sig_set):
-                return hash_val
+                return unhexlify(hash_val)
             else:
                 return None
 
@@ -497,7 +501,7 @@ class NoodleCommunity(Community):
         """
         if not self.persistence.contains(block):
             self.persistence.add_block(block)
-        # TODO: add local state update + invariants validation
+        # TODO: Verify invariants
 
     def notify_listeners(self, block):
         """
@@ -527,8 +531,7 @@ class NoodleCommunity(Community):
         return rand.sample(com_peers, commitee_size)
 
     # ------ State-based synchronization -------------
-
-    def request_state(self, peer_address, chain_id, seq_num, state_name=None, include_other_witnesses=True):
+    def request_state(self, peer_address, chain_id, state_name=None, include_other_witnesses=True):
         global_time = self.claim_global_time()
         dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
 
@@ -553,7 +556,7 @@ class NoodleCommunity(Community):
 
             max_votes = self.persistence.get_latest_max_state_votes(payload.key, state_name)
             # Analyze max votes state
-            d = defaultdict(set)
+            d = defaultdict(list)
             if max_votes:
                 seq_num, votes = max_votes
                 my_id = hexlify(self.my_peer.public_key.key_to_bin()).decode()
@@ -566,8 +569,12 @@ class NoodleCommunity(Community):
                     self.persistence.add_state_vote(payload.key, seq_num, my_signed_state)
                 if include_other_witnesses:
                     for p_id, sign, state_hash in votes:
-                        d[state_hash].add((p_id, sign))
+                        d[state_hash].append((p_id, sign))
+                d = dict(d)
                 self.send_state_response(source_address, payload.key, json.dumps(d))
+        else:
+            # TODO: add reject
+            pass
 
     def send_state_response(self, peer_address, chain_id, state_votes):
         global_time = self.claim_global_time()
@@ -586,7 +593,37 @@ class NoodleCommunity(Community):
             self.logger.error("The state is not valid!!")
         else:
             # If state is not know => request it
-            pass
+            if not self.persistence.get_state_by_hash(chain_id, hash_val):
+                # TODO: add cache here
+                self.send_state_by_hash_request(source_address, chain_id, hash_val)
+
+    def send_state_by_hash_request(self, peer_address, chain_id, state_hash):
+        global_time = self.claim_global_time()
+        dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
+        self.logger.debug("Requesting state by hash from peer (%s) ", peer_address)
+        payload = StateByHashRequestPayload(chain_id, state_hash).to_pack_list()
+        packet = self._ez_pack(self._prefix, STATE_BY_HASH_REQ_MSG, [dist, payload], False)
+        self.endpoint.send(peer_address, packet)
+
+    @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, StateByHashRequestPayload)
+    def received_state_by_hash_request(self, source_address, dist, payload: StateByHashRequestPayload):
+        chain_id = payload.key
+        hash_val = payload.value
+        state = self.persistence.get_state_by_hash(chain_id, hash_val)
+        self.send_state_by_hash_response(source_address, chain_id, state)
+
+    def send_state_by_hash_response(self, peer_address, chain_id, state):
+        global_time = self.claim_global_time()
+        dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
+        payload = StateByHashResponsePayload(chain_id, json.dumps(state)).to_pack_list()
+        packet = self._ez_pack(self._prefix, STATE_BY_HASH_RESP_MSG, [dist, payload], False)
+        self.endpoint.send(peer_address, packet)
+
+    @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, StateByHashResponsePayload)
+    def received_state_by_hash_response(self, source_address, dist, payload: StateByHashResponsePayload):
+        chain_id = payload.key
+        state, seq_num = json.loads(payload.value)
+        self.persistence.dump_state(chain_id, seq_num, state)
 
     async def state_sync(self, community_id, state_name=None):
         """
