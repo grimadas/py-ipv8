@@ -1,23 +1,40 @@
-from ipv8.attestation.backbone.datastore.utils import key_to_id, ranges, expand_ranges
+from ipv8.attestation.backbone.datastore.utils import key_to_id, ranges, expand_ranges, json_hash
 
 
 class ChainState:
     """
+    Interface for application logic for the state calculation.
     Class to collapse the chain and validate on integrity of invariants
     """
 
-    def __init__(self):
-        self.state = dict()
+    def __init__(self, name):
+        self.name = name
+        self.personal = False
 
-    def add_block(self, block):
-        # Update the state
-        pass
+    def apply_block(self, prev_state, block):
+        """
+        Apply block(with delta) to the prev_state
+        @param prev_state:
+        @param block:
+        @return: Return new_state
+        """
+        return
 
-    def is_valid(self):
-        pass
+    def init_state(self):
+        """
+        Initialize state when there no blocks
+        @return: Fresh new state
+        """
+        return
 
-    def get_state(self):
-        return self.state
+    def merge(self, old_state, new_state):
+        """
+        Merge two potentially conflicting states
+        @param old_state:
+        @param new_state:
+        @return: Fresh new state of merged states
+        """
+        return
 
 
 class Chain:
@@ -25,7 +42,7 @@ class Chain:
     Index class for chain to ensure that each peer will converge into a consistent chain log.
     """
 
-    def __init__(self, chain_id, personal=True, num_frontiers_store=50):
+    def __init__(self, chain_id, personal=True, num_frontiers_store=50, block_store=None):
         self.chain = dict()
         self.holes = set()
 
@@ -38,8 +55,15 @@ class Chain:
         self.forward_pointers = dict()
         self.frontier = {'p': personal}
 
+        self.last_const_state = None
+        self.state_checkpoints = dict()
+        self.hash_to_state = dict()
+
         self.states = dict()
         self.state_votes = dict()
+
+        self.block_store = block_store
+
         self.num_front_store = num_frontiers_store
 
     def is_state_consistent(self):
@@ -48,8 +72,17 @@ class Chain:
         """
         return not self.inconsistencies and not self.holes
 
-    def add_state(self, state_name, chain_state):
-        self.states[state_name] = chain_state
+    def add_state(self, chain_state):
+        chain_state.chain = self
+        chain_state.personal = self.personal
+        self.states[chain_state.name] = chain_state
+
+        # initialize zero state
+        if chain_state.name not in self.state_checkpoints:
+            self.state_checkpoints[chain_state.name] = dict()
+        init_state = chain_state.init_state()
+        self.state_checkpoints[chain_state.name][0] = init_state
+        self.hash_to_state[json_hash(init_state)] = (chain_state.name, 0)
 
     def add_audit_proof(self):
         pass
@@ -57,8 +90,21 @@ class Chain:
     def calc_terminal(self, current):
         terminal = set()
         for s, h in current:
+            if self.states and self.is_state_consistent():
+                for sn, state in self.states.items():
+                    prev_state = self.state_checkpoints[sn][s - 1]
+                    # take chain state class  and apply block
+                    known_state = self.state_checkpoints[sn].get(s)
+                    current_block = self.block_store.get_block_by_short_hash(h)
+                    new_state = state.apply_block(prev_state, current_block)
+                    merged_state = state.merge(known_state, new_state)
+                    self.state_checkpoints[sn][s] = merged_state
+                    self.hash_to_state[json_hash(merged_state)] = (sn, s)
+
             if (s, h) not in self.forward_pointers:
+                # Terminal nodes achieved
                 terminal.add((s, h))
+                # update the state if any
             else:
                 # make a bfs step
                 terminal.update(self.calc_terminal(self.forward_pointers[(s, h)]))
@@ -93,26 +139,36 @@ class Chain:
     def max_known_seq_num(self):
         return max(self.chain) if self.chain else 0
 
-    def clean_up_state_votes(self):
-        current_front = max(self.frontier['v'])[0]
-        for k in list(self.state_votes.keys()):
-            if current_front - max(k)[0] > self.num_front_store:
-                del self.state_votes[k]
+    def clean_up(self):
+        pass
+        # TODO: implement cleanup for states and frontiers
 
     def get_latest_max_votes(self):
-        return max(self.state_votes.items(), key=lambda x: len(x[1]))
+        return max(self.state_votes.items(), key=lambda x: (len(x[1]), x[0]))
 
     def get_latest_votes(self):
-        return max(self.state_votes.items(), key=lambda x: max(x[0])[0])
+        return max(self.state_votes.items(), key=lambda x: x[0])
+
+    def get_state_by_hash(self, state_hash):
+        return self.hash_to_state.get(state_hash)
+
+    def get_state(self, seq_num, state_name=None):
+        if state_name:
+            return self.state_checkpoints.get(state_name).get(seq_num)
+        else:
+            # get all by seq_num
+            return {k: v[seq_num] for k, v in self.state_checkpoints.items()}
+
+    def add_state_vote(self, seq_num, state_vote):
+        if seq_num not in self.state_votes:
+            self.state_votes[seq_num] = set()
+        self.state_votes[seq_num].add(state_vote)
 
     def reconcile(self, front):
         if 'state' in front:
             # persist state val
-            key = tuple(front['v'])
-            if key not in self.state_votes:
-                self.state_votes[key] = set()
-            # TODO: periodically clean this:
-            self.state_votes[key].add(front['state'])
+            key = max(front['v'])[0]
+            self.add_state_vote(key, tuple(front['state']))
 
         f_holes = expand_ranges(front['h']) if 'h' in front and front['h'] else set()
         max_front_seq = max(front['v'])[0] if 'v' in front and front['v'] else 0
@@ -163,6 +219,4 @@ class Chain:
 
         self._update_frontiers(block_links, block_seq_num, block_hash)
 
-        # Update all states
-        for s in self.states.values():
-            s.add_block(block)
+        self.clean_up()

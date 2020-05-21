@@ -6,6 +6,7 @@ import orjson as json
 from hashlib import sha256
 
 from ....attestation.backbone.block import EMPTY_SIG, GENESIS_HASH, GENESIS_SEQ, NoodleBlock
+from ....attestation.backbone.datastore.consistency import ChainState
 from ....attestation.backbone.datastore.memory_database import NoodleMemoryDatabase
 from ....attestation.backbone.datastore.utils import decode_links, encode_links, key_to_id, hex_to_int
 from ....keyvault.crypto import default_eccrypto
@@ -20,7 +21,7 @@ class TestBlock(NoodleBlock):
     def __init__(self, transaction=None, previous=None, key=None, links=None, com_id=None, block_type=b'test'):
         crypto = default_eccrypto
         if not links:
-            links = set()
+            links = {(0, key_to_id(GENESIS_HASH))}
             com_seq_num = 1
         else:
             com_seq_num = max(links)[0] + 1
@@ -242,3 +243,105 @@ class TestNoodleConsistency(asynctest.TestCase):
         self.assertEqual(list(to_request['c'])[0][0], 2)
         to_request, to_send = db2.reconcile(block.com_id, db1.get_frontier(block.com_id))
         self.assertEqual(list(to_request['c'])[0][0], 2)
+
+    def test_reconcilation_with_state(self):
+        db1 = MockDatabase()
+        db2 = MockDatabase()
+        block = TestBlock()
+        com_id = block.com_id
+        db1.add_chain_state(com_id, MockChainState('sum'))
+        db2.add_chain_state(com_id, MockChainState('sum'))
+
+        # db2.add_block(block)
+        db1.add_block(block)
+
+        block2 = TestBlock(transaction={'id': 40}, com_id=block.com_id, links={(block.com_seq_num, block.short_hash)})
+
+        db1.add_block(block2)
+
+        block2 = TestBlock(transaction={'id': 43}, com_id=block.com_id, links={(block.com_seq_num, block.short_hash)})
+
+        db1.add_block(block2)
+        print(db1.get_frontier(com_id))
+
+        # db2.add_block(block2)
+
+        # to_request, to_send = db1.reconcile(block.com_id, db2.get_frontier(block.com_id))
+        # self.assertEqual(list(to_request['c'])[0][0], 2)
+        # to_request, to_send = db2.reconcile(block.com_id, db1.get_frontier(block.com_id))
+        # self.assertEqual(list(to_request['c'])[0][0], 2)
+
+        print(db1.get_state(com_id, 0))
+        print(db1.get_state(com_id, 1))
+        print(db1.get_state(com_id, 2))
+
+
+class MockChainState(ChainState):
+
+    def __init__(self, name):
+        super().__init__(name)
+
+    def init_state(self):
+        """
+        Initialize state when there no blocks
+        @return: Fresh new state
+        """
+        return {'total': 0, 'vals': (0, 0), 'front': list(), 'stakes': dict()}
+
+    def apply_block(self, prev_state, block):
+        """
+        Apply block(with delta) to the prev_state
+        @param prev_state:
+        @param block:
+        @return: Return new_state
+        """
+        # 1. Calculate delta between state and transaction
+        # get from  front last value
+        delta = block.transaction['id'] - prev_state['vals'][0]
+        sh_hash = key_to_id(block.hash)
+        peer = key_to_id(block.public_key)
+        total = prev_state['total'] + abs(delta)
+        new_stakes = dict()
+        new_stakes.update(prev_state['stakes'])
+        if peer not in prev_state['stakes']:
+            new_stakes[peer] = abs(delta)
+        else:
+            new_stakes[peer] += abs(delta)
+
+        return {'total': total,
+                'front': [sh_hash],
+                'vals': (block.transaction['id'], delta, peer),
+                'stakes': new_stakes
+                }
+
+    def merge(self, old_state, new_state):
+        """
+        Merge two potentially conflicting states
+        @param old_state:
+        @param new_state:
+        @return: Fresh new state of merged states
+        """
+        if not old_state:
+            # There are no conflicts
+            return new_state
+
+        # Check if there are actually conflicting by verifying the fronts
+        merged_state = dict()
+        if not set(new_state['front']).issubset(set(old_state['front'])):
+            # merge fronts
+            merged_state['front'] = list(set(old_state['front']) | set(new_state['front']))
+            merged_state['total'] = old_state['total'] + abs(new_state['vals'][1])
+            merged_state['vals'] = (old_state['vals'][0] + new_state['vals'][1],
+                                    old_state['vals'][1] + new_state['vals'][1])
+            p = new_state['vals'][2]
+            delta = new_state['vals'][1]
+            merged_state['stakes'] = dict()
+            merged_state['stakes'].update(old_state['stakes'])
+            if p not in merged_state['stakes']:
+                merged_state['stakes'][p] = abs(delta)
+            else:
+                merged_state['stakes'][p] += abs(delta)
+
+            return merged_state
+        else:
+            return old_state

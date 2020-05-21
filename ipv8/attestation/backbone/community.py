@@ -3,12 +3,11 @@ The Noodle community.
 """
 import logging
 import random
-import struct
 from asyncio import Future, Queue, ensure_future, sleep
 from binascii import hexlify, unhexlify
+from collections import defaultdict
 from collections import deque
 from functools import wraps
-from hashlib import sha256
 from threading import RLock
 
 import orjson as json
@@ -18,7 +17,7 @@ from ipv8.attestation.backbone.datastore.memory_database import NoodleMemoryData
 from .block import EMPTY_PK, NoodleBlock
 from .caches import AuditProofRequestCache, PingRequestCache, CommunitySyncCache
 from .consts import *
-from .datastore.utils import decode_frontier, encode_frontier, hex_to_int
+from .datastore.utils import decode_frontier, encode_frontier, hex_to_int, json_hash
 from .listener import BlockListener
 from .payload import *
 from .settings import SecurityMode, NoodleSettings
@@ -27,8 +26,6 @@ from ...keyvault.crypto import default_eccrypto
 from ...lazy_community import lazy_wrapper, lazy_wrapper_unsigned, lazy_wrapper_unsigned_wd
 from ...messaging.payload_headers import BinMemberAuthenticationPayload, GlobalTimeDistributionPayload
 from ...peer import Peer
-from ...peerdiscovery.discovery import RandomWalk
-from ...peerdiscovery.network import Network
 from ...requestcache import RequestCache
 from ...util import maybe_coroutine, succeed
 
@@ -44,15 +41,6 @@ def synchronized(f):
             return f(self, *args, **kwargs)
 
     return wrapper
-
-
-class SubTrustCommunity(Community):
-
-    def __init__(self, *args, **kwargs):
-        self.master_peer = kwargs.pop('master_peer')
-        self._prefix = b'\x00' + self.version + self.master_peer.mid
-        self.personal = kwargs.pop('personal')
-        super(SubTrustCommunity, self).__init__(*args, **kwargs)
 
 
 class NoodleBlockListener(BlockListener):
@@ -90,7 +78,6 @@ class NoodleCommunity(Community):
         super(NoodleCommunity, self).__init__(*args, **kwargs)
         self.request_cache = RequestCache()
         self.logger = logging.getLogger(self.__class__.__name__)
-        self.peer_subscriptions = {}  # keeps track of which communities each peer is part of
 
         if not self.persistence:
             self.persistence = self.DB_CLASS(working_directory, db_name, self.my_peer.public_key.key_to_bin())
@@ -119,8 +106,11 @@ class NoodleCommunity(Community):
         self.mem_db_flush_lc = None
         self.transaction_lc = None
 
+        # Communities logic
         self.interest = dict()
-        self.pex = dict()
+        self.my_subscriptions = list()
+
+        self.peer_subscriptions = dict()  # keeps track of which communities each peer is part of
         self.bootstrap_master = None
         self.proof_requests = {}
 
@@ -128,7 +118,8 @@ class NoodleCommunity(Community):
             chr(BLOCKS_REQ_MSG): self.received_blocks_request,
             chr(BLOCK_MSG): self.received_block,
             chr(BLOCK_CAST_MSG): self.received_block_broadcast,
-            chr(FRONTIER_MSG): self.received_frontier
+            chr(FRONTIER_MSG): self.received_frontier,
+            chr(SUBS_MSG): self.received_subs_update
         })
 
         # Enable the memory database
@@ -139,7 +130,7 @@ class NoodleCommunity(Community):
         pass
 
     # ----- SubTrust Community routines ------
-    def subscribe_to_community(self, community_master_peer, personal=False):
+    def subscribe_to_community(self, community_id, personal=False):
         """
         Subscribe to the community with the public key master peer.
         Community is identified with a peer.mid.
@@ -147,34 +138,34 @@ class NoodleCommunity(Community):
         If bootstrap_master is not specified will use RandomWalks to discover other peers for the same community.
         Peer will be connect to maximum  `settings.max_peers_subtrust` peers.
         """
-        if hexlify(self.my_peer.public_key.key_to_bin()) in self.settings.crawlers:
-            self.logger.warning("I am a crawler - not joining subtrust communities")
-        elif not self.ipv8:
-            self.logger.error('No IPv8 service object available, cannot start SubTrustCommunity')
-        elif community_master_peer.public_key.key_to_bin() not in self.pex:
-            self.logger.info("Joining community with mid %s (personal? %s)", community_master_peer.mid, personal)
-            community = SubTrustCommunity(self.my_peer, self.ipv8.endpoint, Network(),
-                                          master_peer=community_master_peer,
-                                          max_peers=self.settings.max_peers_subtrust,
-                                          personal=personal)
-
-            self.ipv8.overlays.append(community)
-            self.pex[community_master_peer.public_key.key_to_bin()] = community
+        if community_id not in self.my_subscriptions:
+            self.my_subscriptions.append(community_id)
+            self.logger.info("Joining community with mid %s (personal? %s)", community_id, personal)
 
             # Find other peers in the community
-            if community_master_peer.public_key.key_to_bin() in self.peer_subscriptions:
-                for address in self.peer_subscriptions[community_master_peer.public_key.key_to_bin()]:
-                    community.walk_to(address)
-
-            if self.bootstrap_master:
-                self.logger.info('Finding other peers with a bootstrap masters')
-                for k in self.bootstrap_master:
-                    community.walk_to(k)
-            else:
-                self.ipv8.strategies.append((RandomWalk(community), self.settings.max_peers_subtrust))
+            for p in self.get_peers():
+                # Send them new subscribe collection
+                self.send_subs_update(p.address, self.my_subscriptions)
 
             # Join the protocol audits
-            self.join_community_gossip(community_master_peer.public_key.key_to_bin(), self.settings.security_mode, self.settings.sync_time)
+            self.join_community_gossip(community_id, self.settings.security_mode, self.settings.sync_time)
+
+    def send_subs_update(self, peer_address, peer_subs):
+        """
+        Send to all known peer subscription update
+        """
+        decoded_list = [hexlify(x).decode() for x in peer_subs]
+        global_time = self.claim_global_time()
+        auth = BinMemberAuthenticationPayload(self.my_peer.public_key.key_to_bin()).to_pack_list()
+        payload = SubscriptionsPayload(self.my_peer.public_key.key_to_bin(), json.dumps(decoded_list)).to_pack_list()
+        dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
+        packet = self._ez_pack(self._prefix, SUBS_MSG, [auth, dist, payload])
+        self.endpoint.send(peer_address, packet)
+
+    @lazy_wrapper(GlobalTimeDistributionPayload, SubscriptionsPayload)
+    def received_subs_update(self, peer, dist, payload: SubscriptionsPayload):
+        peer_subs = json.loads(payload.value)
+        self.process_peer_interests(peer, peer_subs)
 
     def join_community_gossip(self, community_mid, mode, sync_time):
         """
@@ -199,29 +190,45 @@ class NoodleCommunity(Community):
                                                                   delay=random.random(),
                                                                   interval=sync_time)
 
+    def sign_state(self, state):
+        state_hash = json_hash(state)
+        signature = default_eccrypto.create_signature(self.my_peer.key, state_hash)
+        # Prepare for send
+        my_id = hexlify(self.my_peer.public_key.key_to_bin()).decode()
+        signature = hexlify(signature).decode()
+        state_hash = hexlify(state_hash).decode()
+
+        return my_id, signature, state_hash
+
+    def verify_state(self, state_val):
+        # This is a claim of a conditional transaction
+        for hash_val, sig_set in state_val.items():
+            if all(default_eccrypto.is_valid_signature(
+                    default_eccrypto.key_from_public_bin(unhexlify(p_id)),
+                    unhexlify(hash_val),
+                    unhexlify(sign)) for p_id, sign in sig_set):
+                return hash_val
+            else:
+                return None
+
     @synchronized
     def gossip_sync_task(self, community_id):
         frontier = self.persistence.get_frontier(community_id)
-        state = self.persistence.get_latest_state(community_id) \
-            if self.persistence.is_state_consistent(community_id) else None
-        # TODO: include option to include even broken state
         if frontier:
+            seq_num = max(frontier['v'])[0]
+            # Include the state in the frontier dissemination or not?
+
+            state = self.persistence.get_state(community_id, seq_num) \
+                if self.persistence.is_state_consistent(community_id) else None
             # sign state => sign and send hash
             if state:
-                # TODO: what hash might work here?
-                state_blob = json.dumps(state)
-                state_hash = sha256(state_blob).digest()
-                signature = default_eccrypto.create_signature(self.my_peer.key, state_hash)
-                # Prepare for send
-                my_id = hexlify(self.my_peer.public_key.key_to_bin()).decode()
-                signature = hexlify(signature).decode()
-                state_hash = hexlify(state_hash).decode()
+                frontier['state'] = self.sign_state(state)
+                self.persistence.add_state_vote(community_id, seq_num, frontier['state'])
 
-                signed_state = (my_id, signature, state_hash)
-                frontier['state'] = signed_state
-
-            peer_set = self.pex[community_id].get_peers() # select max num randomly
-            self.send_frontier(community_id, frontier, peer_set)
+            # select max num randomly
+            peer_set = self.peer_subscriptions[community_id]
+            f = min(len(peer_set), self.settings.gossip_fanout)
+            self.send_frontier(community_id, frontier, random.sample(peer_set, f))
 
     def send_frontier(self, community_id, frontier, peers):
         global_time = self.claim_global_time()
@@ -240,16 +247,18 @@ class NoodleCommunity(Community):
     @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, FrontierPayload)
     def received_frontier(self, source_address, dist, payload: FrontierPayload):
         frontier = encode_frontier(json.loads(payload.value))
-        cache = self.request_cache.get(COMMUNITY_CACHE, hex_to_int(payload.key))
+        chain_id = payload.key
+
+        cache = self.request_cache.get(COMMUNITY_CACHE, hex_to_int(chain_id))
         if cache:
             cache.receive_frontier(source_address, frontier)
         else:
             # Create new cache
             # TODO: what to do with `send` diff - revisit
-            to_request, to_send = self.persistence.reconcile_or_create(payload.key, frontier)
+            to_request, to_send = self.persistence.reconcile_or_create(chain_id, frontier)
             if any(to_request.values()):
-                self.send_blocks_request(source_address, payload.key, to_request)
-                self.request_cache.add(CommunitySyncCache(self, payload.key))
+                self.send_blocks_request(source_address, chain_id, to_request)
+                self.request_cache.add(CommunitySyncCache(self, chain_id))
 
     def send_blocks_request(self, peer_address, chain_id, request_set):
         """
@@ -394,20 +403,22 @@ class NoodleCommunity(Community):
             packet = self._ez_pack(self._prefix, BLOCK_MSG, [dist, payload], False)
             self.outgoing_block_queue.put_nowait((address, packet))
         else:
-            self.logger.debug("Broadcasting block %s", block)
-            payload = BlockBroadcastPayload.from_half_block(block, ttl).to_pack_list()
+            self.logger.debug("Sending block to a set of peers subscribed to a community %s", block)
+            payload = BlockBroadcastPayload.from_block_gossip(block, ttl).to_pack_list()
             packet = self._ez_pack(self._prefix, BLOCK_CAST_MSG, [dist, payload], False)
 
-            if address_set:
-                f = min(len(address_set), self.settings.broadcast_fanout)
-                self.logger.debug("Broadcasting block in a back-channel  to %s peers", f)
-                peers = (p.address for p in random.sample(address_set, f))
-            else:
-                f = min(len(self.get_peers()), self.settings.broadcast_fanout)
-                self.logger.debug("Broadcasting block in a main-channel  to %s peers", f)
-                peers = (p.address for p in random.sample(self.get_peers(), f))
-            for p in peers:
-                self.outgoing_block_queue.put_nowait((p, packet))
+            # block public key => personal chain
+            pers_subs = self.peer_subscriptions.get(block.public_key)
+            if pers_subs:
+                for p in pers_subs:
+                    self.outgoing_block_queue.put_nowait((p.address, packet))
+
+            # block vertical chain subs
+            if block.com_id != EMPTY_PK:
+                com_subs = self.peer_subscriptions.get(block.com_id)
+                if com_subs:
+                    for p in com_subs:
+                        self.outgoing_block_queue.put_nowait((p.address, packet))
             self._add_broadcasted_blockid(block.block_id)
 
     async def evaluate_outgoing_block_queue(self):
@@ -419,7 +430,7 @@ class NoodleCommunity(Community):
             await sleep(self.settings.block_queue_interval / 1000)
 
     @synchronized
-    def sign_block(self, peer, public_key=EMPTY_PK, block_type=b'unknown',
+    def sign_block(self, peer=None, public_key=EMPTY_PK, block_type=b'unknown',
                    transaction=None, com_id=None, links=None, fork_seq=None):
         if not transaction:
             transaction = dict()
@@ -431,19 +442,22 @@ class NoodleCommunity(Community):
             self.persistence.add_block(block)
             self.notify_listeners(block)
 
+        # Is there a counter-party we need to send the block first?
         if peer == self.my_peer or not peer:
             # We created a self-signed block / initial claim, send to the neighbours
             if block.type not in self.settings.block_types_bc_disabled and not self.settings.is_hiding:
                 self.send_block(block)
             return succeed(block)
         else:
-            # There is a counterparty to sign => Send to the counterparty first
+            # There is a counter-party to sign => Send to the counter-party first
             self.send_block(block, address=peer.address)
             # TODO: send to the community?
+            self.send_block(block)
             return succeed(block)
 
     def self_sign_block(self, block_type=b'unknown', transaction=None, com_id=None, links=None, fork_seq=None):
-        return self.sign_block(self.my_peer, block_type, transaction, com_id, links, fork_seq)
+        return self.sign_block(self.my_peer, block_type=block_type, transaction=transaction, com_id=com_id,
+                               links=links, fork_seq=fork_seq)
 
     @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, BlockPayload)
     async def received_block(self, source_address, dist, payload):
@@ -506,7 +520,6 @@ class NoodleCommunity(Community):
         Process a received half block.
         """
         self.validate_persist_block(blk, peer)
-
         # TODO add bilateral agreements
 
     def choose_community_peers(self, com_peers, current_seed, commitee_size):
@@ -514,6 +527,67 @@ class NoodleCommunity(Community):
         return rand.sample(com_peers, commitee_size)
 
     # ------ State-based synchronization -------------
+
+    def request_state(self, peer_address, chain_id, seq_num, state_name=None, include_other_witnesses=True):
+        global_time = self.claim_global_time()
+        dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
+
+        self.logger.debug("Requesting state from a peer (%s) ", peer_address)
+
+        state_request = {'state': state_name,
+                         'include_others': include_other_witnesses}
+        serialized = json.dumps(state_request)
+        payload = StateRequestPayload(chain_id, serialized).to_pack_list()
+        packet = self._ez_pack(self._prefix, STATE_REQ_MSG, [dist, payload], False)
+        self.endpoint.send(peer_address, packet)
+
+    @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, StateRequestPayload)
+    def received_state_request(self, source_address, dist, payload: StateRequestPayload):
+        # I'm part of the community?
+        if payload.key in self.my_subscriptions:
+            # chain is known
+            # TODO: handle bad format
+            deserial = json.loads(payload.value)
+            state_name = deserial.get('state')
+            include_other_witnesses = deserial.get('include_others')
+
+            max_votes = self.persistence.get_latest_max_state_votes(payload.key, state_name)
+            # Analyze max votes state
+            d = defaultdict(set)
+            if max_votes:
+                seq_num, votes = max_votes
+                my_id = hexlify(self.my_peer.public_key.key_to_bin()).decode()
+                if not any(my_id in i for i in votes):
+                    # My peer didn't sign it => add own vote
+                    state = self.persistence.get_state(payload.key, seq_num)
+                    my_signed_state = self.sign_state(state)
+                    my_signed_state[my_signed_state[2]].add((my_signed_state[0], my_signed_state[1]))
+                    votes.add(my_signed_state)
+                    self.persistence.add_state_vote(payload.key, seq_num, my_signed_state)
+                if include_other_witnesses:
+                    for p_id, sign, state_hash in votes:
+                        d[state_hash].add((p_id, sign))
+                self.send_state_response(source_address, payload.key, json.dumps(d))
+
+    def send_state_response(self, peer_address, chain_id, state_votes):
+        global_time = self.claim_global_time()
+        dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
+
+        self.logger.debug("Sending state to a peer (%s) ", peer_address)
+        payload = StateResponsePayload(chain_id, state_votes).to_pack_list()
+        packet = self._ez_pack(self._prefix, STATE_RESP_MSG, [dist, payload], False)
+        self.endpoint.send(peer_address, packet)
+
+    @lazy_wrapper_unsigned(GlobalTimeDistributionPayload, StateResponsePayload)
+    def received_state_response(self, source_address, dist, payload: StateResponsePayload):
+        chain_id = payload.key
+        hash_val = self.verify_state(json.loads(payload.value))
+        if not hash_val:
+            self.logger.error("The state is not valid!!")
+        else:
+            # If state is not know => request it
+            pass
+
     async def state_sync(self, community_id, state_name=None):
         """
         Synchronise latest accumulated state in a community.
@@ -522,12 +596,6 @@ class NoodleCommunity(Community):
         state = self.persistence.get_latest_state(community_id, state_name)
         # Get the peer list for the community
         peer_list = self.pex[community_id].get_peers()
-
-    def verify_audit(self, status, audit):
-        # This is a claim of a conditional transaction
-        pub_key = default_eccrypto.key_from_public_bin(unhexlify(audit[0]))
-        sign = unhexlify(audit[1])
-        return default_eccrypto.is_valid_signature(pub_key, status, sign)
 
     def trigger_security_alert(self, peer_id, errors, com_id=None):
         tx = {'errors': errors, 'peer': peer_id}
@@ -698,56 +766,47 @@ class NoodleCommunity(Community):
 
     def get_all_communities_peers(self):
         peers = set()
-        for mid in self.pex:
-            val = self.pex[mid].get_peers()
-            if val:
-                peers.update(val)
+        for com_id in self.my_subscriptions:
+            vals = self.peer_subscriptions.get(com_id)
+            if vals:
+                peers.update(vals)
         return peers
 
-    def verify_chain_state(self, chain_id, status):
-        # TODO: implement
-        return True
-
-    # ---- Introduction handshakes ----------------
+    # ---- Introduction handshakes => Exchange your subscriptions ----------------
     def create_introduction_request(self, socket_address, extra_bytes=b''):
         communities = []
-        for community_id in self.pex.keys():
+        for community_id in self.my_subscriptions:
             communities.append(hexlify(community_id).decode())
         extra_bytes = json.dumps(communities)
         return super(NoodleCommunity, self).create_introduction_request(socket_address, extra_bytes)
 
     def create_introduction_response(self, lan_socket_address, socket_address, identifier,
-                                     introduction=None, extra_bytes=b''):
+                                     introduction=None, extra_bytes=b'', prefix=None):
         communities = []
-        for community_id in self.pex.keys():
+        for community_id in self.my_subscriptions:
             communities.append(hexlify(community_id).decode())
         extra_bytes = json.dumps(communities)
         return super(NoodleCommunity, self).create_introduction_response(lan_socket_address, socket_address,
-                                                                         identifier, introduction, extra_bytes)
+                                                                         identifier, introduction, extra_bytes, prefix)
 
     def process_peer_interests(self, peer, communities):
         for community in communities:
             community_id = unhexlify(community)
             if community_id not in self.peer_subscriptions:
                 self.peer_subscriptions[community_id] = set()
-            self.peer_subscriptions[community_id].add(peer.address)
-
-            if community_id in self.pex:
-                self.pex[community_id].walk_to(peer.address)
+            self.peer_subscriptions[community_id].add(peer)
 
     def introduction_response_callback(self, peer, dist, payload):
         communities = json.loads(payload.extra_bytes)
         self.process_peer_interests(peer, communities)
-
         if self.settings.track_neighbours_chains:
-            self.subscribe_to_community(peer, personal=True)
-        if self.settings.crawler:
-            # TODO: add crawling functionality
-            pass
+            self.subscribe_to_community(peer.public_key.key_to_bin(), personal=True)
 
     def introduction_request_callback(self, peer, dist, payload):
         communities = json.loads(payload.extra_bytes)
         self.process_peer_interests(peer, communities)
+        if self.settings.track_neighbours_chains:
+            self.subscribe_to_community(peer.public_key.key_to_bin(), personal=True)
 
     async def unload(self):
         self.logger.debug("Unloading the Noodle Community.")
@@ -757,7 +816,7 @@ class NoodleCommunity(Community):
 
         if self.mem_db_flush_lc and not self.transfer_lc.done():
             self.mem_db_flush_lc.cancel()
-        for mid in self.pex:
+        for mid in self.my_subscriptions:
             if mid in self.periodic_sync_lc and not self.periodic_sync_lc[mid].done():
                 self.periodic_sync_lc[mid].cancel()
 

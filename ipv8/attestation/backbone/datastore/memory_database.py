@@ -3,6 +3,7 @@ import logging
 import time
 from binascii import hexlify
 from hashlib import sha1
+from typing import Optional
 
 from ipv8.attestation.backbone.block import NoodleBlock, EMPTY_PK
 from ipv8.attestation.backbone.datastore.consistency import Chain
@@ -20,6 +21,7 @@ class NoodleMemoryDatabase(object):
 
         self.identity_chains = dict()
         self.community_chains = dict()
+        self._temp_chain_states = dict()
 
         self.blocks = {}
         self.block_cache = {}
@@ -60,22 +62,48 @@ class NoodleMemoryDatabase(object):
         pass
 
     def is_state_consistent(self, chain_id):
-        if chain_id not in self.community_chains and chain_id not in self.identity_chains:
-            return None
-        return self.community_chains[chain_id].is_state_consistent() if chain_id in self.community_chains \
-            else self.identity_chains[chain_id].is_state_consistent()
+        chain = self.get_chain(chain_id)
+        return chain and chain.is_state_consistent()
 
-    def get_latest_state(self, chain_id, state_name=None):
-        if chain_id not in self.community_chains and chain_id not in self.identity_chains:
+    def get_state_votes(self, chain_id, seq_num=None):
+        chain = self.get_chain(chain_id)
+        if chain:
+            return chain.state_votes.get(seq_num) if seq_num else chain.state_votes
+        return None
+
+    def add_state_vote(self, chain_id, seq_num, state_vote):
+        chain = self.get_chain(chain_id)
+        if not chain:
             return None
-        states = self.community_chains[chain_id].states if chain_id in self.community_chains \
-            else self.identity_chains[chain_id].states
-        if state_name:
-            return states.get(state_name)
+        chain.add_state_vote(seq_num, state_vote)
+        return chain
+
+    def get_state(self, chain_id, front_id, state_name=None):
+        chain = self.get_chain(chain_id)
+        if chain:
+            return chain.get_state(front_id, state_name)
+        return None
+
+    def add_chain_state(self, chain_id, chain_state):
+        if chain_id not in self.community_chains and chain_id not in self.identity_chains:
+            # There no chains created => Put to temp store
+            self._temp_chain_states[chain_id] = chain_state
         else:
-            return states
+            chain = self.community_chains[chain_id] if chain_id in self.community_chains \
+                else self.identity_chains[chain_id]
+            chain.add_state(chain_state)
 
-    def get_chain(self, com_id):
+    def get_latest_max_state_votes(self, chain_id, state_name=None):
+        chain = self.get_chain(chain_id)
+        if chain:
+            return chain.get_latest_max_votes()
+
+    def get_state_by_hash(self, chain_id, state_hash):
+        chain = self.get_chain(chain_id)
+        state_ind = chain.get_state_by_hash(state_hash) if chain else None
+        return chain.get_state(state_ind[1], state_ind[0]) if state_ind else None
+
+    def get_chain(self, com_id) -> Optional[Chain]:
         if com_id not in self.community_chains and com_id not in self.identity_chains:
             return None
         return self.community_chains[com_id] if com_id in self.community_chains else self.identity_chains[com_id]
@@ -90,14 +118,32 @@ class NoodleMemoryDatabase(object):
             return self.identity_chains[peer_id].frontier
         return None
 
-    def reconcile_or_create_personal_chain(self, peer_id, frontier):
+    def _create_community_chain(self, com_id):
+        """
+        Create if chain don't exist
+        @param com_id: public key - if of the chain
+        """
+        if com_id not in self.community_chains:
+            self.community_chains[com_id] = Chain(com_id, personal=False, block_store=self)
+            if com_id in self._temp_chain_states:
+                self.community_chains[com_id].add_state(self._temp_chain_states.pop(com_id))
+
+    def _create_identity_chain(self, peer_id):
+        """
+        Create if chain don't exist
+        @param com_id: public key - if of the chain
+        """
         if peer_id not in self.identity_chains:
-            self.identity_chains[peer_id] = Chain(peer_id)
+            self.identity_chains[peer_id] = Chain(peer_id, block_store=self)
+            if peer_id in self._temp_chain_states:
+                self.community_chains[peer_id].add_state(self._temp_chain_states.pop(peer_id))
+
+    def reconcile_or_create_personal_chain(self, peer_id, frontier):
+        self._create_identity_chain(peer_id)
         return self.reconcile(peer_id, frontier)
 
     def reconcile_or_create_community_chain(self, com_id, frontier):
-        if com_id not in self.community_chains:
-            self.community_chains[com_id] = Chain(com_id, personal=False)
+        self._create_community_chain(com_id)
         return self.reconcile(com_id, frontier)
 
     def reconcile_or_create(self, chain_id, frontier):
@@ -113,6 +159,7 @@ class NoodleMemoryDatabase(object):
             return self.identity_chains[chain_id].reconcile(frontier)
         return None
 
+    # TODO: move this to another class
     def get_block_by_short_hash(self, short_hash):
         full_hash = self.short_map.get(short_hash)
         return self.blocks.get(full_hash)
@@ -121,10 +168,15 @@ class NoodleMemoryDatabase(object):
         blocks = set()
         chain = self.identity_chains[chain_id] if chain_id in self.identity_chains else self.community_chains[chain_id]
         for b_i in expand_ranges(request['m']):
-            # FIXME will definitely fail
             blocks.update({self.get_block_by_short_hash(sh) for sh in chain.chain[b_i]})
         for sn, sh in request['c']:
-            blocks.add(self.get_block_by_short_hash(sh))
+            val = self.get_block_by_short_hash(sh)
+            if not val:
+                print('Not found block! ', sh)
+                print(self.blocks)
+                print(self.get_chain(chain_id).chain)
+                print(self.get_chain(chain_id).frontier)
+            blocks.add(val)
         return blocks
 
     def get_block_class(self, block_type):
@@ -155,7 +207,7 @@ class NoodleMemoryDatabase(object):
 
             self.short_map[key_to_id(block.public_key)] = block.public_key
             # Initialize identity chain
-            self.identity_chains[block.public_key] = Chain(block.public_key)
+            self._create_identity_chain(block.public_key)
         block_id = block.sequence_number
         if block_id not in self.block_cache[block.public_key]:
             self.block_cache[block.public_key][block_id] = set()
@@ -165,8 +217,7 @@ class NoodleMemoryDatabase(object):
 
         # Add to community chain
         if block.com_id != EMPTY_PK:
-            if block.com_id not in self.community_chains:
-                self.community_chains[block.com_id] = Chain(block.com_id, personal=False)
+            self._create_community_chain(block.com_id)
             self.community_chains[block.com_id].add_block(block)
 
         # time when block is received by peer

@@ -74,8 +74,9 @@ class NoodleBlock(object):
             self._previous = json.dumps(decode_links(self.previous))
 
             # Linked blocks => links to the block in other chains
-            self.links = set()
-            self._links = json.dumps([])
+            self.links = {(GENESIS_SEQ-1, key_to_id(GENESIS_HASH))}
+            self._links = json.dumps(decode_links(self.links))
+
             # Metadata for community identifiers
             self.com_id = EMPTY_PK
             self.com_seq_num = 0

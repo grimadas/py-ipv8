@@ -1,4 +1,6 @@
 from binascii import hexlify
+import orjson as json
+from hashlib import sha256
 
 KEY_LEN = 8
 
@@ -48,7 +50,15 @@ def encode_frontier(frontier):
     return encoded
 
 
+def json_hash(value):
+    return sha256(json.dumps(value)).digest()
+
+
 def decode_links(link_val):
+    """
+    Decode to the sendable packet
+    @param link_val: set of links
+    """
     if type(link_val) == set:
         # set of tuples: seq_num, hash
         res = list()
@@ -62,6 +72,10 @@ def decode_links(link_val):
 
 
 def encode_links(link_val):
+    """
+    Encode list of links to python set
+    @param link_val: list of sendable links
+    """
     res = set()
     if not link_val:
         return res

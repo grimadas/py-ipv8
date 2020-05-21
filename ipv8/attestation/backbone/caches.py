@@ -189,13 +189,18 @@ class CommunitySyncCache(NumberCache):
     def on_timeout(self):
         # TODO convert this to a queue
         async def add_later():
-            self.community.request_cache.add(CommunitySyncCache(self.community, self.chain_id))
+            try:
+                self.community.request_cache.add(CommunitySyncCache(self.community, self.chain_id))
+            except RuntimeError:
+                pass
         # Process all frontiers received
         cand = self.process_working_front()
         if cand:
             # Send request to candidate peer
             self.community.send_blocks_request(cand[0], self.chain_id, cand[1])
             self.community.request_cache.register_anonymous_task("add-later", add_later, delay=0.0)
+            if self.community.request_cache.get(COMMUNITY_CACHE, hex_to_int(self.chain_id)):
+                self.community.request_cache.pop(COMMUNITY_CACHE, hex_to_int(self.chain_id))
 
 
 class NoodleCrawlRequestCache(NumberCache):

@@ -1,10 +1,11 @@
 from asyncio import sleep
 
+from .test_consistency_chain import MockChainState
 from ...base import TestBase
-from ....peer import Peer
 from ...mocking.ipv8 import MockIPv8
 from ....attestation.backbone.block import NoodleBlock
 from ....attestation.backbone.community import NoodleCommunity
+from ....attestation.backbone.settings import NoodleSettings
 from ....keyvault.crypto import default_eccrypto
 
 
@@ -27,11 +28,11 @@ class TestNoodleCommunityBase(TestBase):
         # Make sure every node has a community to listen to
         self.community_key = default_eccrypto.generate_key(u"curve25519").pub()
         self.community_id = self.community_key.key_to_bin()
-        com_peer = Peer(self.community_key)
         for node in self.nodes:
-            node.overlay.subscribe_to_community(com_peer)
+            node.overlay.subscribe_to_community(self.community_key.key_to_bin())
 
     def create_node(self):
+        settings = NoodleSettings()
         ipv8 = MockIPv8(u"curve25519", NoodleCommunity, working_directory=u":memory:")
         ipv8.overlay.ipv8 = ipv8
 
@@ -46,7 +47,8 @@ class TestNoodleCommunityBase(TestBase):
         await self.introduce_nodes()
 
         # Have node 0 create a block
-        block = await self.nodes[0].overlay.sign_block(list(self.nodes[0].network.verified_peers)[0], block_type=b'test', transaction={})
+        block = await self.nodes[0].overlay.sign_block(list(self.nodes[0].network.verified_peers)[0],
+                                                       block_type=b'test', transaction={})
         await self.deliver_messages()
 
         # Node 1 should now have the block in its database
@@ -147,7 +149,6 @@ class TestNoodleCommunityThreeNodes(TestNoodleCommunityBase):
         """
         With 3 peers, check that one peer builds upon the frontier containing the blocks of the other peers.
         """
-        await self.introduce_nodes()
 
         self.nodes[0].overlay.sign_block(self.nodes[0].overlay.my_peer,
                                          com_id=self.community_id, block_type=b'test', transaction={})
@@ -161,6 +162,40 @@ class TestNoodleCommunityThreeNodes(TestNoodleCommunityBase):
 
         await sleep(1)
 
-        # The frontier should be the last block craeted by peer 2
+        # The frontier should be the last block created by peer 2
         frontier = self.nodes[2].overlay.persistence.get_frontier(self.community_id)
         self.assertEqual(len(list(frontier['v'])), 1)
+        frontier = self.nodes[1].overlay.persistence.get_frontier(self.community_id)
+        self.assertEqual(1, len(list(frontier['v'])))
+
+    async def test_stateful_horizontal_chain(self):
+        for i in range(3):
+            self.nodes[i].overlay.persistence.add_chain_state(self.community_id, MockChainState('sum'))
+
+        self.nodes[0].overlay.sign_block(self.nodes[0].overlay.my_peer,
+                                         com_id=self.community_id, block_type=b'test', transaction={'id': 40})
+        self.nodes[1].overlay.sign_block(self.nodes[1].overlay.my_peer,
+                                         com_id=self.community_id, block_type=b'test', transaction={'id': 45})
+
+        await sleep(1)
+
+        self.nodes[1].overlay.sign_block(self.nodes[2].overlay.my_peer,
+                                         com_id=self.community_id, block_type=b'test', transaction={'id': 50})
+
+        await sleep(1)
+
+        # The frontier should be the last block created by peer 2
+        frontier = self.nodes[2].overlay.persistence.get_frontier(self.community_id)
+        self.assertEqual(len(list(frontier['v'])), 1)
+        frontier = self.nodes[1].overlay.persistence.get_frontier(self.community_id)
+
+        self.assertEqual(1, len(list(frontier['v'])))
+
+        val = self.nodes[1].overlay.persistence.get_state(self.community_id, 2)
+        val1 = self.nodes[0].overlay.persistence.get_state(self.community_id, 2)
+        val2 = self.nodes[2].overlay.persistence.get_state(self.community_id, 2)
+
+        self.assertEqual(val, val1)
+        self.assertEqual(val1, val2)
+
+        print(self.nodes[1].overlay.persistence.get_state(self.community_id, 2))

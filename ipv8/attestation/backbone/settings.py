@@ -17,10 +17,13 @@ class NoodleSettings(object):
 
     def __init__(self):
         # Time to verify received frontiers
-        self.sync_timeout = 1.0
+        self.sync_timeout = 0.6
 
         # Track personal chains of all neighbors (e.g., join the community around a peer when receiving an introduction response from it)
         self.track_neighbours_chains = False
+
+        # Gossip fanout for frontiers exchange
+        self.gossip_fanout = 10
 
         # The set with block types that should not be broadcast
         self.block_types_bc_disabled = set()
@@ -56,7 +59,7 @@ class NoodleSettings(object):
         self.ignore_validation = False
 
         # Sync round time in seconds
-        self.sync_time = 1
+        self.sync_time = 0.5
 
         # Security mode
         self.security_mode = SecurityMode.VANILLA
@@ -95,3 +98,5 @@ class NoodleSettings(object):
         self.transfer_queue_interval = 2
         self.block_queue_interval = 2
         self.audit_response_queue_interval = 2
+
+        self.frontier_queue_interval = 100

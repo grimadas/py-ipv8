@@ -65,11 +65,11 @@ class BlockBroadcastPayload(BlockPayload):
     def __init__(self, block_type, transaction, public_key, sequence_number,
                  previous, links, com_id, com_seq_num, signature, timestamp, ttl):
         super(BlockBroadcastPayload, self).__init__(block_type, transaction, public_key, sequence_number,
-                 previous, links, com_id, com_seq_num, signature, timestamp)
+                                                    previous, links, com_id, com_seq_num, signature, timestamp)
         self.ttl = ttl
 
     @classmethod
-    def from_half_block(cls, block, ttl):
+    def from_block_gossip(cls, block, ttl):
         return BlockBroadcastPayload(
             block.type,
             block._transaction,
@@ -110,6 +110,10 @@ class KVPayload(Payload):
         return KVPayload(key, value)
 
 
+class SubscriptionsPayload(KVPayload):
+    pass
+
+
 class FrontierPayload(KVPayload):
     pass
 
@@ -119,6 +123,14 @@ class BlocksRequestPayload(KVPayload):
 
 
 class BlockResponsePayload(KVPayload):
+    pass
+
+
+class StateRequestPayload(KVPayload):
+    pass
+
+
+class StateResponsePayload(KVPayload):
     pass
 
 
