@@ -467,6 +467,7 @@ class NoodleCommunity(Community):
         block = NoodleBlock.create(block_type, transaction,
                                    self.persistence, self.my_peer.public_key.key_to_bin(),
                                    com_id, links, fork_seq)
+        self.logger.info("Signing the block %s", block)
         block.sign(self.my_peer.key)
         if not self.persistence.contains(block):
             self.persistence.add_block(block)
@@ -486,6 +487,7 @@ class NoodleCommunity(Community):
             return succeed(block)
 
     def self_sign_block(self, block_type=b'unknown', transaction=None, com_id=None, links=None, fork_seq=None):
+
         return self.sign_block(self.my_peer, block_type=block_type, transaction=transaction, com_id=com_id,
                                links=links, fork_seq=fork_seq)
 
