@@ -100,8 +100,8 @@ class PlexusCommunity(Community):
         self.outgoing_block_queue = Queue()
         self.outgoing_block_queue_task = ensure_future(self.evaluate_outgoing_block_queue())
 
-        self.audit_response_queue = Queue()
-        self.audit_response_queue_task = ensure_future(self.evaluate_audit_response_queue())
+        #self.audit_response_queue = Queue()
+        #self.audit_response_queue_task = ensure_future(self.evaluate_audit_response_queue())
 
         self.mem_db_flush_lc = None
         self.transaction_lc = None
