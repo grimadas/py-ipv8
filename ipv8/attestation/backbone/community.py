@@ -134,6 +134,28 @@ class NoodleCommunity(Community):
         pass
 
     # ----- SubTrust Community routines ------
+    def is_subscribed(self, community_id):
+        return community_id not in self.my_subscriptions
+
+    def subscribe_to_multi_community(self, communties):
+        """
+        Subscribe to the community with the public key master peer.
+        Community is identified with a peer.mid.
+
+        If bootstrap_master is not specified will use RandomWalks to discover other peers for the same community.
+        Peer will be connect to maximum  `settings.max_peers_subtrust` peers.
+        """
+        for c_id in communties:
+            if c_id not in self.my_subscriptions:
+                self.my_subscriptions.append(c_id)
+                # Join the protocol audits
+                self.join_community_gossip(c_id, self.settings.security_mode, self.settings.sync_time)
+
+        # Find other peers in the community
+        for p in self.get_peers():
+            # Send them new subscribe collection
+            self.send_subs_update(p.address, self.my_subscriptions)
+
     def subscribe_to_community(self, community_id, personal=False):
         """
         Subscribe to the community with the public key master peer.
