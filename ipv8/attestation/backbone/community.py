@@ -240,6 +240,7 @@ class PlexusCommunity(Community):
     @synchronized
     def gossip_sync_task(self, community_id):
         frontier = self.persistence.get_frontier(community_id)
+        self.logger.debug('Gossip sync %s ', frontier)
         if frontier and 'v' in frontier:
             seq_num = max(frontier['v'])[0]
             # Include the state in the frontier dissemination or not?
@@ -303,11 +304,15 @@ class PlexusCommunity(Community):
     @lazy_wrapper(GlobalTimeDistributionPayload, BlocksRequestPayload)
     def received_blocks_request(self, peer, dist, payload: BlocksRequestPayload):
         blocks_request = encode_frontier(json.loads(payload.value))
+        self._logger.debug("Received block request %s {%s}",
+                           blocks_request, peer)
         chain_id = payload.key
         blocks = self.persistence.get_blocks_by_request(chain_id, blocks_request)
         self.send_multi_blocks(peer.address, chain_id, blocks)
 
     def send_multi_blocks(self, address, chain_id, blocks):
+        self._logger.debug("Sending blocks %s to {%s}",
+                           blocks, address)
         for block in blocks:
             global_time = self.claim_global_time()
             dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
@@ -499,6 +504,9 @@ class PlexusCommunity(Community):
         """
         peer = Peer(payload.public_key, source_address)
         block = self.get_block_class(payload.type).from_payload(payload, self.serializer)
+
+        self._logger.debug("Received block directly %s", block)
+
         self.incoming_block_queue.put_nowait((peer, block))
 
     async def evaluate_incoming_block_queue(self):
