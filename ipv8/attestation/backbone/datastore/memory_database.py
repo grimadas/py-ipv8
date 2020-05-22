@@ -199,7 +199,7 @@ class PlexusMemoryDatabase(object):
         Add block to the database and update indexes
         @param block: PlexusBlock
         """
-        print('Adding block ')
+        print('Adding block ', block)
         if block.hash not in self.blocks:
             self.blocks[block.hash] = block
             self.short_map[key_to_id(block.hash)] = block.hash

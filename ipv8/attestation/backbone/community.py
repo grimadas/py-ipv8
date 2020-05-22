@@ -517,6 +517,7 @@ class PlexusCommunity(Community):
         """
         block = self.get_block_class(payload.type).from_payload(payload, self.serializer)
         peer = Peer(payload.public_key, source_address)
+        print('Block received ', block)
         self.validate_persist_block(block, peer)
 
         if block.block_id not in self.relayed_broadcasts and payload.ttl > 1:
