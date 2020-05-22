@@ -69,12 +69,13 @@ class PlexusCommunity(Community):
     version = b'\x02'
 
     def __init__(self, *args, **kwargs):
+        print('INIT plexus ', args, kwargs)
         working_directory = kwargs.pop('working_directory', '')
         self.persistence = kwargs.pop('persistence', None)
         db_name = kwargs.pop('db_name', self.DB_NAME)
         self.settings = kwargs.pop('settings', PlexusSettings())
         self.receive_block_lock = RLock()
-        self.ipv8 = kwargs.pop('ipv8', None)
+        print('Call super plexus')
         super(PlexusCommunity, self).__init__(*args, **kwargs)
         self.request_cache = RequestCache()
         self.logger = logging.getLogger(self.__class__.__name__)
