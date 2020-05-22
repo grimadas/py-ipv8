@@ -487,7 +487,7 @@ class NoodleCommunity(Community):
             return succeed(block)
 
     def self_sign_block(self, block_type=b'unknown', transaction=None, com_id=None, links=None, fork_seq=None):
-
+        print('Calling self sign block')
         return self.sign_block(self.my_peer, block_type=block_type, transaction=transaction, com_id=com_id,
                                links=links, fork_seq=fork_seq)
 
