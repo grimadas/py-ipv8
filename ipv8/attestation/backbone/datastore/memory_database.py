@@ -203,6 +203,7 @@ class PlexusMemoryDatabase(object):
         if block.hash not in self.blocks:
             self.blocks[block.hash] = block
             self.short_map[key_to_id(block.hash)] = block.hash
+            print('Block added to blocks')
 
         if block.public_key not in self.block_cache:
             # This is a public key => new user
@@ -210,16 +211,21 @@ class PlexusMemoryDatabase(object):
 
             self.short_map[key_to_id(block.public_key)] = block.public_key
             # Initialize identity chain
+            print('Creating identity chain')
             self._create_identity_chain(block.public_key)
+            print('Created identity chain')
         block_id = block.sequence_number
         if block_id not in self.block_cache[block.public_key]:
             self.block_cache[block.public_key][block_id] = set()
         self.block_cache[block.public_key][block_id].add(block.hash)
+        print('Block cash added')
 
         self.identity_chains[block.public_key].add_block(block)
+        print('Identity chain added')
 
         # Add to community chain
         if block.com_id != EMPTY_PK:
+            print('Add community chain')
             self._create_community_chain(block.com_id)
             self.community_chains[block.com_id].add_block(block)
 
