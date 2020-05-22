@@ -6,14 +6,14 @@ from hashlib import sha1
 from typing import Optional
 from collections import defaultdict
 
-from ipv8.attestation.backbone.block import NoodleBlock, EMPTY_PK
+from ipv8.attestation.backbone.block import PlexusBlock, EMPTY_PK
 from ipv8.attestation.backbone.datastore.consistency import Chain
 from ipv8.attestation.backbone.datastore.utils import key_to_id, expand_ranges
 
 
-class NoodleMemoryDatabase(object):
+class PlexusMemoryDatabase(object):
     """
-    This class defines an optimized memory database for Noodle.
+    This class defines an optimized memory database for Plexus.
     """
 
     def __init__(self, working_directory, db_name, original_db=None, accept_all_chains=True):
@@ -186,7 +186,7 @@ class NoodleMemoryDatabase(object):
         Get the block class for a specific block type.
         """
         if block_type not in self.block_types:
-            return NoodleBlock
+            return PlexusBlock
 
         return self.block_types[block_type]
 
@@ -194,10 +194,10 @@ class NoodleMemoryDatabase(object):
         if peer.mid not in self.peer_map:
             self.peer_map[peer.mid] = peer.public_key.key_to_bin()
 
-    def add_block(self, block: NoodleBlock):
+    def add_block(self, block: PlexusBlock):
         """
         Add block to the database and update indexes
-        @param block: NoodleBlock
+        @param block: PlexusBlock
         """
         if block.hash not in self.blocks:
             self.blocks[block.hash] = block

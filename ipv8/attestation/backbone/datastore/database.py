@@ -4,14 +4,14 @@ This file contains everything related to persistence for TrustChain.
 import os
 from binascii import hexlify
 
-from ipv8.attestation.backbone.block import NoodleBlock
+from ipv8.attestation.backbone.block import PlexusBlock
 from ipv8.attestation.trustchain.blockcache import BlockCache
 from ipv8.database import Database, database_blob
 
 DATABASE_DIRECTORY = os.path.join(u"sqlite")
 
 
-class NoodleDB(Database):
+class PlexusDB(Database):
     """
     Persistence layer for the TrustChain Community.
     Connection layer to SQLiteDB.
@@ -31,7 +31,7 @@ class NoodleDB(Database):
             db_path = os.path.join(working_directory, os.path.join(DATABASE_DIRECTORY, u"%s.db" % db_name))
         else:
             db_path = working_directory
-        super(NoodleDB, self).__init__(db_path)
+        super(PlexusDB, self).__init__(db_path)
         self._logger.debug("TrustChain database path: %s", db_path)
         self.db_name = db_name
         self.block_types = {}
@@ -47,7 +47,7 @@ class NoodleDB(Database):
         Get the block class for a specific block type.
         """
         if block_type not in self.block_types:
-            return NoodleDB
+            return PlexusDB
 
         return self.block_types[block_type]
 
@@ -416,10 +416,10 @@ class NoodleDB(Database):
             """
 
     def open(self, initial_statements=True, prepare_visioning=True):
-        return super(NoodleDB, self).open(initial_statements, prepare_visioning)
+        return super(PlexusDB, self).open(initial_statements, prepare_visioning)
 
     def close(self, commit=True):
-        return super(NoodleDB, self).close(commit)
+        return super(PlexusDB, self).close(commit)
 
     def check_database(self, database_version):
         """

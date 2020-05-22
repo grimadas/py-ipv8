@@ -10,7 +10,7 @@ class SecurityMode(Enum):
     BOTH = 3
 
 
-class NoodleSettings(object):
+class PlexusSettings(object):
     """
     This class holds various settings regarding TrustChain.
     """

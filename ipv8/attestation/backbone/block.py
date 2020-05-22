@@ -34,9 +34,9 @@ class Link:
         return self.unit_price * self.quantity_on_hand
 
 
-class NoodleBlock(object):
+class PlexusBlock(object):
     """
-    Container for Noodle block information
+    Container for Plexus block information
     """
     Data = namedtuple('Data', ['type',
                                'transaction',
@@ -52,14 +52,14 @@ class NoodleBlock(object):
 
     def __init__(self, data=None, serializer=default_serializer):
         """
-        Create a new NoodleBlock or load from an existing database entry.
+        Create a new PlexusBlock or load from an existing database entry.
 
         :param data: Optional data to initialize this block with.
         :type data: TrustChainBlock.Data or list
         :param serializer: An optional custom serializer to use for this block.
         :type serializer: Serializer
         """
-        super(NoodleBlock, self).__init__()
+        super(PlexusBlock, self).__init__()
         self.serializer = serializer
         if data is None:
             # data
@@ -137,7 +137,7 @@ class NoodleBlock(object):
         return self.hash_number
 
     def __eq__(self, other):
-        if not isinstance(other, NoodleBlock):
+        if not isinstance(other, PlexusBlock):
             return False
         return self.pack() == other.pack()
 
@@ -182,7 +182,7 @@ class NoodleBlock(object):
     def create(cls, block_type, transaction, database, public_key,
                com_id=None, links=None, fork_seq=None):
         """
-        Create NoodleBlock
+        Create PlexusBlock
         :param block_type: type of the block
         :param transaction: transaction as a dictionary
         :param database: local database with chains
@@ -190,7 +190,7 @@ class NoodleBlock(object):
         :param com_id: id of the community which block is part of [optional]
         :param links: Explicitly link with these blocks [optional]
         :param fork_seq: Fork personal chain at this level [optional]
-        :return: NoodleBlock with given parameters
+        :return: PlexusBlock with given parameters
         """
         if fork_seq:
             blks = database.get(public_key, fork_seq)

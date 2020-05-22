@@ -1,18 +1,15 @@
 from asyncio import sleep
 
-import orjson
-
 from .test_consistency_chain import MockChainState
 from ...base import TestBase
 from ...mocking.ipv8 import MockIPv8
-from ....attestation.backbone.block import NoodleBlock
-from ....attestation.backbone.community import NoodleCommunity
-from ....attestation.backbone.datastore.utils import json_hash
-from ....attestation.backbone.settings import NoodleSettings
+from ....attestation.backbone.block import PlexusBlock
+from ....attestation.backbone.community import PlexusCommunity
+from ....attestation.backbone.settings import PlexusSettings
 from ....keyvault.crypto import default_eccrypto
 
 
-class DummyBlock(NoodleBlock):
+class DummyBlock(PlexusBlock):
     """
     This dummy block is used to verify the conversion to a specific block class during the tests.
     Other than that, it has no purpose.
@@ -20,13 +17,13 @@ class DummyBlock(NoodleBlock):
     pass
 
 
-class TestNoodleCommunityBase(TestBase):
+class TestPlexusCommunityBase(TestBase):
     __testing__ = False
     NUM_NODES = 2
 
     def setUp(self):
-        super(TestNoodleCommunityBase, self).setUp()
-        self.initialize(NoodleCommunity, self.NUM_NODES)
+        super(TestPlexusCommunityBase, self).setUp()
+        self.initialize(PlexusCommunity, self.NUM_NODES)
 
         # Make sure every node has a community to listen to
         self.community_key = default_eccrypto.generate_key(u"curve25519").pub()
@@ -35,8 +32,8 @@ class TestNoodleCommunityBase(TestBase):
             node.overlay.subscribe_to_community(self.community_id)
 
     def create_node(self):
-        settings = NoodleSettings()
-        ipv8 = MockIPv8(u"curve25519", NoodleCommunity, working_directory=u":memory:")
+        settings = PlexusSettings()
+        ipv8 = MockIPv8(u"curve25519", PlexusCommunity, working_directory=u":memory:")
         ipv8.overlay.ipv8 = ipv8
 
         return ipv8
@@ -58,7 +55,7 @@ class TestNoodleCommunityBase(TestBase):
         self.assertTrue(self.nodes[1].overlay.persistence.get(block.public_key, block.sequence_number))
 
 
-class TestNoodleCommunityTwoNodes(TestNoodleCommunityBase):
+class TestPlexusCommunityTwoNodes(TestPlexusCommunityBase):
     __testing__ = True
 
     async def test_basic_horizontal_chain_no_conclict_one_tx(self):
@@ -145,7 +142,7 @@ class TestNoodleCommunityTwoNodes(TestNoodleCommunityBase):
         self.assertEqual(frontier_a, frontier_b)
 
 
-class TestNoodleCommunityThreeNodes(TestNoodleCommunityBase):
+class TestPlexusCommunityThreeNodes(TestPlexusCommunityBase):
     __testing__ = True
     NUM_NODES = 3
 

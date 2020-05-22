@@ -46,27 +46,6 @@ class IntroCrawlTimeout(NumberCache):
         pass
 
 
-class ChainCrawlCache(IntroCrawlTimeout):
-    """
-    This cache keeps track of the crawl of a whole chain.
-    """
-
-    def __init__(self, community, peer, crawl_future, known_chain_length=-1):
-        super(ChainCrawlCache, self).__init__(community, peer, identifier=u"chaincrawl")
-        self.community = community
-        self.current_crawl_future = None
-        self.crawl_future = crawl_future
-        self.peer = peer
-        self.known_chain_length = known_chain_length
-
-        self.current_request_range = (0, 0)
-        self.current_request_attempts = 0
-
-    @property
-    def timeout_delay(self):
-        return 120.0
-
-
 class BlockSignCache(NumberCache):
     """
     This request cache keeps track of outstanding half block signature requests.
@@ -76,7 +55,7 @@ class BlockSignCache(NumberCache):
         """
         A cache to keep track of the signing of one of our blocks by a counterparty.
 
-        :param community: the NoodleCommunity
+        :param community: the PlexusCommunity
         :param half_block: the half_block requiring a counterparty
         :param sign_future: the Deferred to fire once this block has been double signed
         :param socket_address: the peer we sent the block to
@@ -118,48 +97,11 @@ class BlockSignCache(NumberCache):
             self.sign_future.set_exception(RuntimeError("Signature request timeout"))
 
 
-class CrawlRequestCache(NumberCache):
-    """
-    This request cache keeps track of outstanding crawl requests.
-    """
-    CRAWL_TIMEOUT = 20.0
-
-    def __init__(self, community, crawl_id, crawl_future):
-        super(CrawlRequestCache, self).__init__(community.request_cache, u"crawl", crawl_id)
-        self.logger = logging.getLogger(self.__class__.__name__)
-        self.community = community
-        self.crawl_future = crawl_future
-        self.received_half_blocks = []
-        self.total_half_blocks_expected = maximum_integer
-
-    @property
-    def timeout_delay(self):
-        return CrawlRequestCache.CRAWL_TIMEOUT
-
-    def received_block(self, block, total_count):
-        self.received_half_blocks.append(block)
-        self.total_half_blocks_expected = total_count
-
-        if self.total_half_blocks_expected == 0:
-            self.community.request_cache.pop(u"crawl", self.number)
-            get_event_loop().call_soon_threadsafe(self.crawl_future.set_result, [])
-        elif len(self.received_half_blocks) >= self.total_half_blocks_expected:
-            self.community.request_cache.pop(u"crawl", self.number)
-            get_event_loop().call_soon_threadsafe(self.crawl_future.set_result, self.received_half_blocks)
-
-    def received_empty_response(self):
-        self.community.request_cache.pop(u"crawl", self.number)
-        get_event_loop().call_soon_threadsafe(self.crawl_future.set_result, self.received_half_blocks)
-
-    def on_timeout(self):
-        self._logger.info("Timeout for crawl with id %d", self.number)
-        self.crawl_future.set_result(self.received_half_blocks)
-
-
 class CommunitySyncCache(NumberCache):
     """
     This cache tracks outstanding sync requests with other peers in a community
     """
+
     def __init__(self, community, chain_id):
         cache_num = hex_to_int(chain_id)
         NumberCache.__init__(self, community.request_cache, COMMUNITY_CACHE, cache_num)
@@ -193,6 +135,7 @@ class CommunitySyncCache(NumberCache):
                 self.community.request_cache.add(CommunitySyncCache(self.community, self.chain_id))
             except RuntimeError:
                 pass
+
         # Process all frontiers received
         cand = self.process_working_front()
         if cand:
@@ -201,123 +144,6 @@ class CommunitySyncCache(NumberCache):
             self.community.request_cache.register_anonymous_task("add-later", add_later, delay=0.0)
             if self.community.request_cache.get(COMMUNITY_CACHE, hex_to_int(self.chain_id)):
                 self.community.request_cache.pop(COMMUNITY_CACHE, hex_to_int(self.chain_id))
-
-
-class NoodleCrawlRequestCache(NumberCache):
-    """
-    This request cache keeps track of outstanding noodle crawl requests.
-    """
-    CRAWL_TIMEOUT = 20.0
-
-    def __init__(self, community, crawl_id, crawl_future, peer_id=None, total_blocks=None, **kwargs):
-        super(NoodleCrawlRequestCache, self).__init__(community.request_cache, u"noodle-crawl", crawl_id)
-        self.logger = logging.getLogger(self.__class__.__name__)
-        self.community = community
-        self.crawl_future = crawl_future
-        self.received_half_blocks = []
-        self.total_half_blocks_expected = total_blocks if total_blocks else maximum_integer
-        self.peer_id = peer_id
-        self.added = kwargs
-
-    @property
-    def timeout_delay(self):
-        return NoodleCrawlRequestCache.CRAWL_TIMEOUT
-
-    def received_block(self, block, total_count=None):
-        self.received_half_blocks.append(block)
-        if total_count:
-            self.total_half_blocks_expected = total_count
-
-        if self.total_half_blocks_expected == 0:
-            self.community.request_cache.pop(u"noodle-crawl", self.number)
-            self.crawl_future.set_result([])
-        elif len(self.received_half_blocks) >= self.total_half_blocks_expected:
-            self.community.request_cache.pop(u"noodle-crawl", self.number)
-            self.crawl_future.set_result(self.received_half_blocks)
-
-    def received_empty_response(self):
-        self.community.request_cache.pop(u"noodle-crawl", self.number)
-        self.crawl_future.set_result(self.received_half_blocks)
-
-    def on_timeout(self):
-        self._logger.info("Timeout for noodle crawl with id %d", self.number)
-        self.crawl_future.set_result(self.received_half_blocks)
-
-
-class AuditRequestCache(NumberCache):
-    """
-    This request cache keeps track of outstanding audit requests.
-    """
-    CACHE_IDENTIFIER = u"audit"
-
-    def __init__(self, community, crawl_id, audit_future, total_expected_audits):
-        super(AuditRequestCache, self).__init__(community.request_cache, self.CACHE_IDENTIFIER, crawl_id)
-        self.logger = logging.getLogger(self.__class__.__name__)
-        self.community = community
-        self.audit_future = audit_future
-        self.received_audit_proofs = []
-        self.total_expected_audits = total_expected_audits
-
-    @property
-    def timeout_delay(self):
-        return self.community.settings.audit_request_timeout
-
-    def received_audit_proof(self, audit_proof):
-        self.received_audit_proofs.append(audit_proof)
-
-        if len(self.received_audit_proofs) >= self.total_expected_audits:
-            self.community.request_cache.pop(self.CACHE_IDENTIFIER, self.number)
-            self.audit_future.set_result(self.received_audit_proofs)
-
-    def received_empty_response(self):
-        self.community.request_cache.pop(self.CACHE_IDENTIFIER, self.number)
-        self.audit_future.set_result(self.received_audit_proofs)
-
-    def on_timeout(self):
-        self._logger.info("Timeout for audit with id %d (received proofs: %d)", self.number,
-                          len(self.received_audit_proofs))
-        self.audit_future.set_result(self.received_audit_proofs)
-
-
-class AuditProofRequestCache(NumberCache):
-    """
-    This request cache keeps track of outstanding audit proof requests.
-    We expect the peer status and some audit proofs, so a total of two pieces of information.
-    """
-    CACHE_IDENTIFIER = u"proof-request"
-
-    def __init__(self, community, crawl_id):
-        super(AuditProofRequestCache, self).__init__(community.request_cache, self.CACHE_IDENTIFIER, crawl_id)
-        self.logger = logging.getLogger(self.__class__.__name__)
-        self.community = community
-        self.futures = []
-        self.peer_status = None
-        self.audit_proofs = None
-
-    @property
-    def timeout_delay(self):
-        return self.community.settings.audit_proof_request_timeout
-
-    def received_peer_status(self, peer_status):
-        self.peer_status = peer_status
-
-        if self.peer_status and self.audit_proofs:
-            self.community.request_cache.pop(self.CACHE_IDENTIFIER, self.number)
-            for future in self.futures:
-                future.set_result((self.peer_status, self.audit_proofs))
-
-    def received_audit_proof(self, audit_proofs):
-        self.audit_proofs = audit_proofs
-
-        if self.peer_status and self.audit_proofs:
-            self.community.request_cache.pop(self.CACHE_IDENTIFIER, self.number)
-            for future in self.futures:
-                future.set_result((self.peer_status, self.audit_proofs))
-
-    def on_timeout(self):
-        self._logger.info("Timeout for audit proof request with id %d", self.number)
-        for future in self.futures:
-            future.errback(RuntimeError("Timeout for audit proof request with id %d" % self.number))
 
 
 class PingRequestCache(RandomNumberCache):

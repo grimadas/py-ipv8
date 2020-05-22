@@ -1,5 +1,5 @@
 """
-The Noodle community.
+The Plexus backbone
 """
 import logging
 import random
@@ -12,15 +12,15 @@ from threading import RLock
 
 import orjson as json
 
-from ipv8.attestation.backbone.datastore.database import NoodleDB
-from ipv8.attestation.backbone.datastore.memory_database import NoodleMemoryDatabase
-from .block import EMPTY_PK, NoodleBlock
+from ipv8.attestation.backbone.datastore.database import PlexusDB
+from ipv8.attestation.backbone.datastore.memory_database import PlexusMemoryDatabase
+from .block import EMPTY_PK, PlexusBlock
 from .caches import AuditProofRequestCache, PingRequestCache, CommunitySyncCache
 from .consts import *
 from .datastore.utils import decode_frontier, encode_frontier, hex_to_int, json_hash
 from .listener import BlockListener
 from .payload import *
-from .settings import SecurityMode, NoodleSettings
+from .settings import SecurityMode, PlexusSettings
 from ...community import Community
 from ...keyvault.crypto import default_eccrypto
 from ...lazy_community import lazy_wrapper, lazy_wrapper_unsigned, lazy_wrapper_unsigned_wd
@@ -43,11 +43,11 @@ def synchronized(f):
     return wrapper
 
 
-class NoodleBlockListener(BlockListener):
+class PlexusBlockListener(BlockListener):
     """
     This block listener simply signs all blocks it receives.
     """
-    BLOCK_CLASS = NoodleBlock
+    BLOCK_CLASS = PlexusBlock
 
     def should_sign(self, block):
         return True
@@ -56,7 +56,7 @@ class NoodleBlockListener(BlockListener):
         pass
 
 
-class NoodleCommunity(Community):
+class PlexusCommunity(Community):
     """
     Community for secure backbone.
     """
@@ -64,18 +64,18 @@ class NoodleCommunity(Community):
                                  "39fc977d84f71a431f8825ba885a5cf86b2498c6b473f33dd20dbdcffd199048fc"))
 
     UNIVERSAL_BLOCK_LISTENER = b'UNIVERSAL_BLOCK_LISTENER'
-    DB_CLASS = NoodleDB
-    DB_NAME = 'noodle'
+    DB_CLASS = PlexusDB
+    DB_NAME = 'plexus'
     version = b'\x02'
 
     def __init__(self, *args, **kwargs):
         working_directory = kwargs.pop('working_directory', '')
         self.persistence = kwargs.pop('persistence', None)
         db_name = kwargs.pop('db_name', self.DB_NAME)
-        self.settings = kwargs.pop('settings', NoodleSettings())
+        self.settings = kwargs.pop('settings', PlexusSettings())
         self.receive_block_lock = RLock()
         self.ipv8 = kwargs.pop('ipv8', None)
-        super(NoodleCommunity, self).__init__(*args, **kwargs)
+        super(PlexusCommunity, self).__init__(*args, **kwargs)
         self.request_cache = RequestCache()
         self.logger = logging.getLogger(self.__class__.__name__)
 
@@ -84,7 +84,7 @@ class NoodleCommunity(Community):
 
         self.relayed_broadcasts = set()
         self.relayed_broadcasts_order = deque()
-        self.logger.debug("The Noodle community started with Public Key: %s",
+        self.logger.debug("The Plexus community started with Public Key: %s",
                           hexlify(self.my_peer.public_key.key_to_bin()))
         self.shutting_down = False
         self.listeners_map = {}  # Map of block_type -> [callbacks]
@@ -128,7 +128,7 @@ class NoodleCommunity(Community):
 
         # Enable the memory database
         orig_db = self.persistence
-        self.persistence = NoodleMemoryDatabase(working_directory, db_name, orig_db)
+        self.persistence = PlexusMemoryDatabase(working_directory, db_name, orig_db)
 
     def add_interest(self):
         pass
@@ -388,7 +388,7 @@ class NoodleCommunity(Community):
         Get the block class for a specific block type.
         """
         if block_type not in self.listeners_map or not self.listeners_map[block_type]:
-            return NoodleBlock
+            return PlexusBlock
 
         return self.listeners_map[block_type][0].BLOCK_CLASS
 
@@ -464,7 +464,7 @@ class NoodleCommunity(Community):
                    transaction=None, com_id=None, links=None, fork_seq=None):
         if not transaction:
             transaction = dict()
-        block = NoodleBlock.create(block_type, transaction,
+        block = PlexusBlock.create(block_type, transaction,
                                    self.persistence, self.my_peer.public_key.key_to_bin(),
                                    com_id, links, fork_seq)
         self.logger.info("Signing the block %s", block)
@@ -547,7 +547,7 @@ class NoodleCommunity(Community):
             listener.received_block(block)
 
     @synchronized
-    async def process_block(self, blk: NoodleBlock, peer, status=None, audit_proofs=None):
+    async def process_block(self, blk: PlexusBlock, peer, status=None, audit_proofs=None):
         """
         Process a received half block.
         """
@@ -843,7 +843,7 @@ class NoodleCommunity(Community):
         for community_id in self.my_subscriptions:
             communities.append(hexlify(community_id).decode())
         extra_bytes = json.dumps(communities)
-        return super(NoodleCommunity, self).create_introduction_request(socket_address, extra_bytes)
+        return super(PlexusCommunity, self).create_introduction_request(socket_address, extra_bytes)
 
     def create_introduction_response(self, lan_socket_address, socket_address, identifier,
                                      introduction=None, extra_bytes=b'', prefix=None):
@@ -851,7 +851,7 @@ class NoodleCommunity(Community):
         for community_id in self.my_subscriptions:
             communities.append(hexlify(community_id).decode())
         extra_bytes = json.dumps(communities)
-        return super(NoodleCommunity, self).create_introduction_response(lan_socket_address, socket_address,
+        return super(PlexusCommunity, self).create_introduction_response(lan_socket_address, socket_address,
                                                                          identifier, introduction, extra_bytes, prefix)
 
     def process_peer_interests(self, peer, communities):
@@ -874,7 +874,7 @@ class NoodleCommunity(Community):
             self.subscribe_to_community(peer.public_key.key_to_bin(), personal=True)
 
     async def unload(self):
-        self.logger.debug("Unloading the Noodle Community.")
+        self.logger.debug("Unloading the Plexus Community.")
         self.shutting_down = True
 
         await self.request_cache.shutdown()
@@ -893,17 +893,17 @@ class NoodleCommunity(Community):
         if not self.audit_response_queue_task.done():
             self.audit_response_queue_task.cancel()
 
-        await super(NoodleCommunity, self).unload()
+        await super(PlexusCommunity, self).unload()
 
         # Close the persistence layer
         self.persistence.close()
 
 
-class NoodleTestnetCommunity(NoodleCommunity):
+class PlexusTestnetCommunity(PlexusCommunity):
     """
-    This community defines the testnet for Noodle
+    This community defines the testnet for Plexus
     """
-    DB_NAME = 'noodle_testnet'
+    DB_NAME = 'plexus_testnet'
 
     master_peer = Peer(unhexlify("4c69624e61434c504b3abaa09505b032231182217276fc355dc38fb8e4998a02f91d3ba00f6fbf648"
                                  "5116b8c8c212be783fc3171a529f50ce25feb6c4dcc8106f468e5401bf37e8129e2"))

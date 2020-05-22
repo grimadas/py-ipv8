@@ -5,14 +5,14 @@ import asynctest
 import orjson as json
 from hashlib import sha256
 
-from ....attestation.backbone.block import EMPTY_SIG, GENESIS_HASH, GENESIS_SEQ, NoodleBlock
+from ....attestation.backbone.block import EMPTY_SIG, GENESIS_HASH, GENESIS_SEQ, PlexusBlock
 from ....attestation.backbone.datastore.consistency import ChainState
-from ....attestation.backbone.datastore.memory_database import NoodleMemoryDatabase
+from ....attestation.backbone.datastore.memory_database import PlexusMemoryDatabase
 from ....attestation.backbone.datastore.utils import decode_links, encode_links, key_to_id, hex_to_int
 from ....keyvault.crypto import default_eccrypto
 
 
-class TestBlock(NoodleBlock):
+class TestBlock(PlexusBlock):
     """
     Test Block that simulates a block used in TrustChain.
     Also used in other test files for TrustChain.
@@ -40,7 +40,7 @@ class TestBlock(NoodleBlock):
         else:
             self.key = crypto.generate_key(u"curve25519")
 
-        NoodleBlock.__init__(self, (block_type,
+        PlexusBlock.__init__(self, (block_type,
                                     json.dumps(transaction),
                                     self.key.pub().key_to_bin(),
                                     pers_seq_num,
@@ -53,16 +53,16 @@ class TestBlock(NoodleBlock):
         self.sign(self.key)
 
 
-class MockDatabase(NoodleMemoryDatabase):
+class MockDatabase(PlexusMemoryDatabase):
     """
     This mocked database is only used during the tests.
     """
 
     def __init__(self):
-        NoodleMemoryDatabase.__init__(self, '', 'mock')
+        PlexusMemoryDatabase.__init__(self, '', 'mock')
 
 
-class TestNoodleBlocks(asynctest.TestCase):
+class TestPlexusBlocks(asynctest.TestCase):
     """
     This class contains tests for a TrustChain block.
     """
@@ -81,7 +81,7 @@ class TestNoodleBlocks(asynctest.TestCase):
         """
         key = default_eccrypto.generate_key(u"curve25519")
         db = MockDatabase()
-        block = NoodleBlock.create(b'test', {'id': 42}, db, key.pub().key_to_bin())
+        block = PlexusBlock.create(b'test', {'id': 42}, db, key.pub().key_to_bin())
         self.assertIn((0, key_to_id(GENESIS_HASH)), block.previous)
         self.assertEqual(block.public_key, key.pub().key_to_bin())
         self.assertEqual(block.signature, EMPTY_SIG)
@@ -118,7 +118,7 @@ class TestNoodleBlocks(asynctest.TestCase):
         key = default_eccrypto.generate_key(u"curve25519")
         prev = TestBlock(key=key)
         db.add_block(prev)
-        block = NoodleBlock.create(b'test', {'id': 42}, db, prev.public_key)
+        block = PlexusBlock.create(b'test', {'id': 42}, db, prev.public_key)
 
         self.assertEqual({(1, key_to_id(prev.hash))}, block.previous)
         self.assertEqual(block.sequence_number, 2)
@@ -134,14 +134,14 @@ class TestNoodleBlocks(asynctest.TestCase):
         db = MockDatabase()
         db.add_block(gen)
         key = default_eccrypto.generate_key(u"curve25519")
-        block = NoodleBlock.create(b'test', {'id': 42}, db, key.pub().key_to_bin(), com_id=com_key)
+        block = PlexusBlock.create(b'test', {'id': 42}, db, key.pub().key_to_bin(), com_id=com_key)
 
         self.assertEqual({(1, key_to_id(gen.hash))}, block.links)
         self.assertEqual(2, block.com_seq_num)
         self.assertEqual(com_key, block.com_id)
 
 
-class TestNoodleConsistency(asynctest.TestCase):
+class TestPlexusConsistency(asynctest.TestCase):
 
     def test_personal_chain_no_previous(self):
         """
@@ -220,7 +220,7 @@ class TestNoodleConsistency(asynctest.TestCase):
         block_keys = []
         for field in iter(block):
             block_keys.append(field[0])
-        expected_keys = set(NoodleBlock.Data._fields)
+        expected_keys = set(PlexusBlock.Data._fields)
         # Check if we have the required keys
         self.assertSetEqual(expected_keys | {'hash'}, set(block_keys))
         # Check for duplicates
@@ -262,7 +262,6 @@ class TestNoodleConsistency(asynctest.TestCase):
         block2 = TestBlock(transaction={'id': 43}, com_id=block.com_id, links={(block.com_seq_num, block.short_hash)})
 
         db1.add_block(block2)
-        print(db1.get_frontier(com_id))
 
         # db2.add_block(block2)
 
