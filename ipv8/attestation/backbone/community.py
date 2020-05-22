@@ -99,7 +99,7 @@ class PlexusCommunity(Community):
         self.outgoing_block_queue = Queue()
         self.outgoing_block_queue_task = ensure_future(self.evaluate_outgoing_block_queue())
 
-        #self.audit_response_queue = Queue()
+        self.audit_response_queue = Queue()
         #self.audit_response_queue_task = ensure_future(self.evaluate_audit_response_queue())
 
         self.mem_db_flush_lc = None
@@ -210,7 +210,6 @@ class PlexusCommunity(Community):
         """
         # Start sync task after the discovery
         task = self.gossip_sync_task if mode == SecurityMode.VANILLA else None
-        print('Security mode ', mode)
 
         self.periodic_sync_lc[community_mid] = self.register_task("sync_" + str(community_mid), task, community_mid,
                                                                   delay=random.random(),
@@ -477,7 +476,6 @@ class PlexusCommunity(Community):
         if not self.persistence.contains(block):
             self.persistence.add_block(block)
             self.notify_listeners(block)
-        print('Proceed to block send')
 
         # Is there a counter-party we need to send the block first?
         if counterparty_peer == self.my_peer or not counterparty_peer:
@@ -493,7 +491,6 @@ class PlexusCommunity(Community):
             return succeed(block)
 
     def self_sign_block(self, block_type=b'unknown', transaction=None, com_id=None, links=None, fork_seq=None):
-        print('Calling self sign block')
         return self.sign_block(self.my_peer, block_type=block_type, transaction=transaction, com_id=com_id,
                                links=links, fork_seq=fork_seq)
 
@@ -525,7 +522,6 @@ class PlexusCommunity(Community):
         """
         block = self.get_block_class(payload.type).from_payload(payload, self.serializer)
         peer = Peer(payload.public_key, source_address)
-        print('Block received ', block)
         self.validate_persist_block(block, peer)
 
         if block.block_id not in self.relayed_broadcasts and payload.ttl > 1:
@@ -748,8 +744,8 @@ class PlexusCommunity(Community):
             self.incoming_block_queue_task.cancel()
         if not self.outgoing_block_queue_task.done():
             self.outgoing_block_queue_task.cancel()
-        if not self.audit_response_queue_task.done():
-            self.audit_response_queue_task.cancel()
+        #if not self.audit_response_queue_task.done():
+        #    self.audit_response_queue_task.cancel()
 
         await super(PlexusCommunity, self).unload()
 
