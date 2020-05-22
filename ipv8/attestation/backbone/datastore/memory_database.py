@@ -199,6 +199,7 @@ class PlexusMemoryDatabase(object):
         Add block to the database and update indexes
         @param block: PlexusBlock
         """
+        print('Adding block ')
         if block.hash not in self.blocks:
             self.blocks[block.hash] = block
             self.short_map[key_to_id(block.hash)] = block.hash
@@ -224,6 +225,7 @@ class PlexusMemoryDatabase(object):
 
         # time when block is received by peer
         self.block_time[block.hash] = int(round(time.time() * 1000))
+        print('Block added ')
 
         # add to persistent
         # if self.original_db and self.do_commit:

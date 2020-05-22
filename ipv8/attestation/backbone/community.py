@@ -69,13 +69,11 @@ class PlexusCommunity(Community):
     version = b'\x02'
 
     def __init__(self, *args, **kwargs):
-        print('INIT plexus ', args, kwargs)
         working_directory = kwargs.pop('working_directory', '')
         self.persistence = kwargs.pop('persistence', None)
         db_name = kwargs.pop('db_name', self.DB_NAME)
         self.settings = kwargs.pop('settings', PlexusSettings())
         self.receive_block_lock = RLock()
-        print('Call super plexus')
         super(PlexusCommunity, self).__init__(*args, **kwargs)
         self.request_cache = RequestCache()
         self.logger = logging.getLogger(self.__class__.__name__)
@@ -212,6 +210,7 @@ class PlexusCommunity(Community):
         """
         # Start sync task after the discovery
         task = self.gossip_sync_task if mode == SecurityMode.VANILLA else None
+        print('Security mode ', mode)
 
         self.periodic_sync_lc[community_mid] = self.register_task("sync_" + str(community_mid), task, community_mid,
                                                                   delay=random.random(),
@@ -415,7 +414,7 @@ class PlexusCommunity(Community):
             to_remove = self.relayed_broadcasts_order.popleft()
             self.relayed_broadcasts.remove(to_remove)
 
-    def send_block(self, block, address=None, address_set=None, ttl=1):
+    def send_block(self, block, address=None, ttl=1):
         """
         Send a block to a specific address, or do a broadcast to known peers if no peer is specified.
         """
@@ -461,7 +460,7 @@ class PlexusCommunity(Community):
             await sleep(self.settings.block_queue_interval / 1000)
 
     @synchronized
-    def sign_block(self, counterparty_peer=None, public_key=EMPTY_PK, block_type=b'unknown',
+    def sign_block(self, counterparty_peer=None, block_type=b'unknown',
                    transaction=None, com_id=None, links=None, fork_seq=None):
         if not transaction:
             transaction = dict()
@@ -473,6 +472,7 @@ class PlexusCommunity(Community):
         if not self.persistence.contains(block):
             self.persistence.add_block(block)
             self.notify_listeners(block)
+        print('Proceed to block send')
 
         # Is there a counter-party we need to send the block first?
         if counterparty_peer == self.my_peer or not counterparty_peer:
