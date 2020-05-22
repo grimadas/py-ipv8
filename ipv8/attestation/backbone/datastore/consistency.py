@@ -1,5 +1,4 @@
 from ipv8.attestation.backbone.datastore.utils import key_to_id, ranges, expand_ranges, json_hash
-from collections import defaultdict
 
 
 class ChainState:

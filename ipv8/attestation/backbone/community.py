@@ -3,7 +3,7 @@ The Plexus backbone
 """
 import logging
 import random
-from asyncio import Future, Queue, ensure_future, sleep
+from asyncio import Queue, ensure_future, sleep
 from binascii import hexlify, unhexlify
 from collections import defaultdict
 from collections import deque
@@ -15,7 +15,7 @@ import orjson as json
 from ipv8.attestation.backbone.datastore.database import PlexusDB
 from ipv8.attestation.backbone.datastore.memory_database import PlexusMemoryDatabase
 from .block import EMPTY_PK, PlexusBlock
-from .caches import AuditProofRequestCache, PingRequestCache, CommunitySyncCache
+from .caches import PingRequestCache, CommunitySyncCache
 from .consts import *
 from .datastore.utils import decode_frontier, encode_frontier, hex_to_int, json_hash
 from .listener import BlockListener
@@ -23,7 +23,7 @@ from .payload import *
 from .settings import SecurityMode, PlexusSettings
 from ...community import Community
 from ...keyvault.crypto import default_eccrypto
-from ...lazy_community import lazy_wrapper, lazy_wrapper_unsigned, lazy_wrapper_unsigned_wd
+from ...lazy_community import lazy_wrapper, lazy_wrapper_unsigned
 from ...messaging.payload_headers import BinMemberAuthenticationPayload, GlobalTimeDistributionPayload
 from ...peer import Peer
 from ...requestcache import RequestCache
@@ -210,7 +210,7 @@ class PlexusCommunity(Community):
         @param sync_time: interval in seconds to run the task
         """
         # Start sync task after the discovery
-        task = self.gossip_sync_task if mode == SecurityMode.VANILLA else self.trustchain_active_sync
+        task = self.gossip_sync_task if mode == SecurityMode.VANILLA else None
 
         self.periodic_sync_lc[community_mid] = self.register_task("sync_" + str(community_mid), task, community_mid,
                                                                   delay=random.random(),
@@ -677,158 +677,6 @@ class PlexusCommunity(Community):
 
     # ----------- Auditing chain state wrp invariants ----------------
 
-    async def send_audit_proofs_request(self, audit_id, peer, chain_id, block_hash, state_name=None):
-        """
-        Request audit proofs for some sequence number from a specific peer.
-        For example: verify that peer has balance, has certain reputation etc.
-        :param audit_id: id for the cache and tracking
-        :param peer: who to send the audit request
-        :param chain_id: id of the chain that requires auditing
-        :param block_hash: Hash of the block in the chain. Acts as a time to which to validate the chain.
-        :param state_name: audit specific state. If none: all state values will be validated
-        """
-        self._logger.debug("Sending audit proof request to peer %s:%d (chain: %s)",
-                           peer.address[0], peer.address[1], chain_id)
-        request_future = Future()
-        cache = AuditProofRequestCache(self, audit_id)
-        cache.futures.append(request_future)
-        self.request_cache.add(cache)
-
-        global_time = self.claim_global_time()
-        val = json.dumps({'chain': chain_id, 'blk_hash': block_hash, 'state': state_name})
-        payload = AuditProofRequestPayload(audit_id, val).to_pack_list()
-        dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
-
-        packet = self._ez_pack(self._prefix, AUDIT_PROOFS_REQ_MSG, [dist, payload], False)
-        self.endpoint.send(peer.address, packet)
-        return await request_future
-
-    @synchronized
-    @lazy_wrapper_unsigned_wd(GlobalTimeDistributionPayload, AuditProofRequestPayload)
-    def received_audit_proofs_request(self, source_address, dist, payload, data):
-        # get the last collected audit proof and send it back
-        pack = self.persistence.get_peer_proofs(**json.loads(payload.value))
-        if pack:
-            seq_num, status, proofs = pack
-            # There is an audit request peer can answer
-            self.respond_with_audit_proof(source_address, payload.crawl_id, proofs, status)
-        else:
-            # There are no proofs that we can provide to this peer.
-            # Remember the request and answer later, when we received enough proofs.
-            self._logger.info("Adding audit proof request from %s:%d (id: %d) to cache",
-                              source_address[0], source_address[1], payload.crawl_id)
-            if payload.seq_num not in self.proof_requests:
-                self.proof_requests[payload.seq_num] = []
-            self.proof_requests[payload.seq_num].append((source_address, payload.crawl_id))
-
-    def respond_with_audit_proof(self, address, audit_id, proofs, status):
-        """
-        Send audit proofs and status back to a specific peer, based on a request.
-        """
-        self.logger.info("Responding with audit proof %s to peer %s:%d", audit_id, address[0], address[1])
-        for item in [proofs, status]:
-            global_time = self.claim_global_time()
-            payload = AuditProofResponsePayload(audit_id, item, item == proofs).to_pack_list()
-            dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
-
-            packet = self._ez_pack(self._prefix, 14, [dist, payload], False)
-            self.endpoint.send(address, packet)
-
-    async def evaluate_audit_response_queue(self):
-        while True:
-            audit_info = await self.audit_response_queue.get()
-            address, audit_id, proofs, status = audit_info
-            self.respond_with_audit_proof(address, audit_id, proofs, status)
-            await sleep(self.settings.audit_response_queue_interval / 1000)
-
-    @synchronized
-    @lazy_wrapper_unsigned_wd(GlobalTimeDistributionPayload, AuditProofResponsePayload)
-    def received_audit_proofs_response(self, source_address, dist, payload, data):
-        cache = self.request_cache.get(u'proof-request', payload.audit_id)
-        if cache:
-            if payload.is_proof:
-                cache.received_audit_proof(payload.item)
-            else:
-                cache.received_peer_status(payload.item)
-        else:
-            self.logger.info("Received audit proof response for non-existent cache with id %s", payload.audit_id)
-
-    @synchronized
-    @lazy_wrapper_unsigned_wd(GlobalTimeDistributionPayload, AuditProofPayload)
-    def received_audit_proofs(self, source_address, dist, payload, data):
-        cache = self.request_cache.get(u'audit', payload.audit_id)
-        if cache:
-            # status is known => This is audit collection initiated by my peer
-            audit = json.loads(payload.audit_proof)
-            # TODO: if audit not valid/resend with bigger peer set
-            for v in audit.items():
-                cache.received_audit_proof(v)
-        else:
-            self.logger.info("Received audit proof for non-existent cache with id %s", payload.audit_id)
-
-    def send_audit_request(self, peer, crawl_id, peer_status):
-        """
-        Ask target peer for an audit of your chain.
-        """
-        self._logger.info("Sending audit request to peer %s:%d", peer.address[0], peer.address[1])
-        global_time = self.claim_global_time()
-        auth = BinMemberAuthenticationPayload(self.my_peer.public_key.key_to_bin()).to_pack_list()
-        payload = AuditRequestPayload(crawl_id, peer_status).to_pack_list()
-        dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
-
-        packet = self._ez_pack(self._prefix, 12, [auth, dist, payload])
-        self.endpoint.send(peer.address, packet)
-
-    @synchronized
-    @lazy_wrapper(GlobalTimeDistributionPayload, AuditRequestPayload)
-    def received_audit_request(self, peer, dist, payload):
-        # TODO: Add DOS protection
-        self.logger.info("Received audit request %s from peer %s:%d", payload.audit_id, peer.address[0],
-                         peer.address[1])
-        self.perform_audit(peer.address, payload)
-
-    def perform_audit(self, source_address, audit_request):
-        peer_id = self.persistence.int_to_id(audit_request.audit_id)
-        # TODO: add verifications
-        try:
-            peer_status = json.loads(audit_request.peer_status)
-            # Verify peer status
-            result = self.verify_peer_status(peer_id, peer_status)
-            if result.state == ValidationResult.invalid:
-                # Alert: Peer is provably hiding a transaction
-                self.logger.error("Peer is hiding transactions: %s", result.errors)
-                self.trigger_security_alert(peer_id, result.errors)
-            else:
-                if self.persistence.dump_peer_status(peer_id, peer_status):
-                    # Create an audit proof for the this sequence and send it back
-                    seq_num = peer_status['seq_num']
-                    self.persistence.add_peer_proofs(peer_id, seq_num, peer_status, None)
-                    # Create an audit proof for the this sequence
-                    signature = default_eccrypto.create_signature(self.my_peer.key, audit_request.peer_status)
-                    # create an audit proof
-                    audit = {}
-                    my_id = hexlify(self.my_peer.public_key.key_to_bin()).decode()
-                    audit[my_id] = hexlify(signature).decode()
-                    self.send_audit_proofs(source_address, audit_request.audit_id, json.dumps(audit))
-                else:
-                    # This is invalid audit request, refusing to sign
-                    self.logger.error("Received invalid audit request id %s", audit_request.crawl_id)
-        except JSONDecodeError:
-            self.logger.info("Invalid JSON received in audit request from peer %s:%d!",
-                             source_address[0], source_address[1])
-
-    def send_audit_proofs(self, address, audit_id, audit_proofs):
-        """
-        Send audit proofs back to a specific peer, based on a requested audit.
-        """
-        self.logger.info("Sending audit proof %s to peer %s:%d", audit_id, address[0], address[1])
-        global_time = self.claim_global_time()
-        payload = AuditProofPayload(audit_id, audit_proofs).to_pack_list()
-        dist = GlobalTimeDistributionPayload(global_time).to_pack_list()
-
-        packet = self._ez_pack(self._prefix, AUDIT_PROOFS_MSG, [dist, payload], False)
-        self.endpoint.send(address, packet)
-
     def get_all_communities_peers(self):
         peers = set()
         for com_id in self.my_subscriptions:
@@ -879,7 +727,7 @@ class PlexusCommunity(Community):
 
         await self.request_cache.shutdown()
 
-        if self.mem_db_flush_lc and not self.transfer_lc.done():
+        if self.mem_db_flush_lc:
             self.mem_db_flush_lc.cancel()
         for mid in self.my_subscriptions:
             if mid in self.periodic_sync_lc and not self.periodic_sync_lc[mid].done():

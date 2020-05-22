@@ -4,7 +4,6 @@ This file contains everything related to persistence for TrustChain.
 import os
 from binascii import hexlify
 
-from ipv8.attestation.backbone.block import PlexusBlock
 from ipv8.attestation.trustchain.blockcache import BlockCache
 from ipv8.database import Database, database_blob
 
