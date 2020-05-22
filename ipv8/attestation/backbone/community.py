@@ -218,7 +218,7 @@ class NoodleCommunity(Community):
     @synchronized
     def gossip_sync_task(self, community_id):
         frontier = self.persistence.get_frontier(community_id)
-        if frontier:
+        if frontier and 'v' in frontier:
             seq_num = max(frontier['v'])[0]
             # Include the state in the frontier dissemination or not?
 
@@ -414,6 +414,8 @@ class NoodleCommunity(Community):
             # block public key => personal chain
             pers_subs = self.peer_subscriptions.get(block.public_key)
             if pers_subs:
+                f = min(len(pers_subs), self.settings.broadcast_fanout)
+                pers_subs = random.sample(pers_subs, f)
                 for p in pers_subs:
                     self.outgoing_block_queue.put_nowait((p.address, packet))
 
@@ -421,6 +423,8 @@ class NoodleCommunity(Community):
             if block.com_id != EMPTY_PK:
                 com_subs = self.peer_subscriptions.get(block.com_id)
                 if com_subs:
+                    f = min(len(com_subs), self.settings.broadcast_fanout)
+                    com_subs = random.sample(com_subs, f)
                     for p in com_subs:
                         self.outgoing_block_queue.put_nowait((p.address, packet))
             self._add_broadcasted_blockid(block.block_id)
@@ -434,7 +438,7 @@ class NoodleCommunity(Community):
             await sleep(self.settings.block_queue_interval / 1000)
 
     @synchronized
-    def sign_block(self, peer=None, public_key=EMPTY_PK, block_type=b'unknown',
+    def sign_block(self, counterparty_peer=None, public_key=EMPTY_PK, block_type=b'unknown',
                    transaction=None, com_id=None, links=None, fork_seq=None):
         if not transaction:
             transaction = dict()
@@ -447,14 +451,14 @@ class NoodleCommunity(Community):
             self.notify_listeners(block)
 
         # Is there a counter-party we need to send the block first?
-        if peer == self.my_peer or not peer:
+        if counterparty_peer == self.my_peer or not counterparty_peer:
             # We created a self-signed block / initial claim, send to the neighbours
             if block.type not in self.settings.block_types_bc_disabled and not self.settings.is_hiding:
                 self.send_block(block)
             return succeed(block)
         else:
             # There is a counter-party to sign => Send to the counter-party first
-            self.send_block(block, address=peer.address)
+            self.send_block(block, address=counterparty_peer.address)
             # TODO: send to the community?
             self.send_block(block)
             return succeed(block)

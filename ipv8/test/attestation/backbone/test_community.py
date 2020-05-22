@@ -30,9 +30,9 @@ class TestNoodleCommunityBase(TestBase):
 
         # Make sure every node has a community to listen to
         self.community_key = default_eccrypto.generate_key(u"curve25519").pub()
-        self.community_id = self.community_key.key_to_bin()
+        self.community_id = str.encode('22') #self.community_key.key_to_bin()
         for node in self.nodes:
-            node.overlay.subscribe_to_community(self.community_key.key_to_bin())
+            node.overlay.subscribe_to_community(self.community_id)
 
     def create_node(self):
         settings = NoodleSettings()
