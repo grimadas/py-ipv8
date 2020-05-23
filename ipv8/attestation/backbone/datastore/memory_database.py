@@ -263,7 +263,7 @@ class PlexusMemoryDatabase(object):
         with open(state_file, "w") as t_file:
             writer = csv.DictWriter(t_file, ['chain_id', 'last_state', 'personal'])
             writer.writeheader()
-            for chain in self.community_chains:
+            for com_key, chain in self.community_chains.items():
                 state = chain.get_last_state()
                 writer.writerow({"chain_id": hexlify(chain.chain_id).decode(),
                                  'last_state': str(state),
