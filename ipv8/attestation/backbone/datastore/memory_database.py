@@ -259,11 +259,22 @@ class PlexusMemoryDatabase(object):
             return self.community_chains[com_key].frontier
         return None
 
+    def commit_states(self, state_file):
+        with open(state_file, "w") as t_file:
+            writer = csv.DictWriter(t_file, ['chain_id', 'last_state', 'personal'])
+            writer.writeheader()
+            for chain in self.community_chains:
+                state = chain.get_last_state()
+                writer.writerow({"chain_id": hexlify(chain.chain_id).decode(),
+                                 'last_state': str(state),
+                                 'personal': False
+                                 })
+
     def commit_block_times(self, block_file):
         with open(block_file, "w") as t_file:
             writer = csv.DictWriter(t_file, ['time', 'transaction', 'type',
-                                                 'peer_id', "seq_num",
-                                                 'com_id', 'com_seq', "links", 'prevs'])
+                                             'peer_id', "seq_num",
+                                             'com_id', 'com_seq', "links", 'prevs'])
             writer.writeheader()
             block_ids = list(self.block_time.keys())
             for block_id in block_ids:

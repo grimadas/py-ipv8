@@ -154,6 +154,9 @@ class Chain:
     def get_state_by_hash(self, state_hash):
         return self.hash_to_state.get(state_hash)
 
+    def get_last_state(self):
+        return {k: {max(v): v.get(max(v))} for k, v in self.state_checkpoints.items()}
+
     def get_state(self, seq_num, state_name=None):
         if state_name:
             return self.state_checkpoints.get(state_name).get(seq_num)
