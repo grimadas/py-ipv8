@@ -17,23 +17,23 @@ class PlexusSettings(object):
 
     def __init__(self):
         # Time to verify received frontiers
-        self.sync_timeout = 1.5
+        self.sync_timeout = 0.6
 
         # Sync round time in seconds
-        self.sync_time = 1.0
+        self.sync_time = 0.5
 
         # Track personal chains of all neighbors
         # (e.g., join the community around a peer when receiving an introduction response from it)
         self.track_neighbours_chains = False
 
         # Gossip fanout for frontiers exchange
-        self.gossip_fanout = 10
+        self.gossip_fanout = 15
 
         # The set with block types that should not be broadcast
         self.block_types_bc_disabled = set()
 
         # The fan-out of the broadcast when a new block is created
-        self.broadcast_fanout = 25
+        self.broadcast_fanout = 15
 
         # The amount of history to keep for broadcasts
         self.broadcast_history_size = 100000
@@ -54,7 +54,7 @@ class PlexusSettings(object):
         self.is_hiding = False
 
         # TTL for informed information dissemination, depends on the topology
-        self.ttl = 3
+        self.ttl = 1
 
         # Use informed broadcast
         self.use_informed_broadcast = False
