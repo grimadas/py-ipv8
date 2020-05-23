@@ -92,7 +92,10 @@ class Chain:
         for s, h in current:
             if self.states and self.is_state_consistent():
                 for sn, state in self.states.items():
-                    prev_state = self.state_checkpoints[sn][s - 1]
+                    prev_state = self.state_checkpoints[sn].get(s - 1)
+                    if not prev_state:
+                        # Previous state not known yet
+                        break
                     # take chain state class  and apply block
                     known_state = self.state_checkpoints[sn].get(s)
                     current_block = self.block_store.get_block_by_short_hash(h)
