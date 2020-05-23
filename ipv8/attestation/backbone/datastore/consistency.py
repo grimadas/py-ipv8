@@ -156,7 +156,7 @@ class Chain:
             return self.state_checkpoints.get(state_name).get(seq_num)
         else:
             # get all by seq_num
-            return {k: v[seq_num] for k, v in self.state_checkpoints.items()}
+            return {k: v.get(seq_num) for k, v in self.state_checkpoints.items()}
 
     def add_state_vote(self, seq_num, state_vote):
         if seq_num not in self.state_votes:
@@ -218,10 +218,11 @@ class Chain:
 
         self._update_frontiers(block_links, block_seq_num, block_hash)
 
-        # Update has of the latest state
-        state_hash = json_hash(self.get_state(block_seq_num))
-        if state_hash not in self.hash_to_state:
-            self.hash_to_state[state_hash] = 0
-        self.hash_to_state[state_hash] = max(self.hash_to_state[state_hash], block_seq_num)
+        # Update hash of the latest state
+        if self.is_state_consistent():
+            state_hash = json_hash(self.get_state(block_seq_num))
+            if state_hash not in self.hash_to_state:
+                self.hash_to_state[state_hash] = 0
+            self.hash_to_state[state_hash] = max(self.hash_to_state[state_hash], block_seq_num)
 
         self.clean_up()
