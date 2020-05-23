@@ -259,29 +259,28 @@ class PlexusMemoryDatabase(object):
             return self.community_chains[com_key].frontier
         return None
 
-    def commit_block_times(self):
-
-        if self.block_file:
-            with open(self.block_file, "a") as t_file:
-                writer = csv.DictWriter(t_file, ['time', 'transaction', 'type',
+    def commit_block_times(self, block_file):
+        with open(block_file, "w") as t_file:
+            writer = csv.DictWriter(t_file, ['time', 'transaction', 'type',
                                                  'peer_id', "seq_num",
                                                  'com_id', 'com_seq', "links", 'prevs'])
-                block_ids = list(self.block_time.keys())
-                for block_id in block_ids:
-                    block = self.blocks[block_id]
-                    time = self.block_time[block_id]
-                    from_id = hexlify(block.public_key).decode()[-8:]
-                    com_id = hexlify(block.com_id).decode()[-8:]
+            writer.writeheader()
+            block_ids = list(self.block_time.keys())
+            for block_id in block_ids:
+                block = self.blocks[block_id]
+                time = self.block_time[block_id]
+                from_id = hexlify(block.public_key).decode()[-8:]
+                com_id = hexlify(block.com_id).decode()[:8]
 
-                    writer.writerow({"time": time, 'transaction': str(block.transaction),
-                                     'type': block.type.decode(),
-                                     'seq_num': block.sequence_number,
-                                     'peer_id': from_id,
-                                     'com_id': com_id,
-                                     "com_seq": block.com_seq_num,
-                                     'links': str(block.links),
-                                     'prevs': str(block.previous)})
-                    self.block_time.pop(block_id)
+                writer.writerow({"time": time, 'transaction': str(block.transaction),
+                                 'type': block.type.decode(),
+                                 'seq_num': block.sequence_number,
+                                 'peer_id': from_id,
+                                 'com_id': com_id,
+                                 "com_seq": block.com_seq_num,
+                                 'links': str(block.links),
+                                 'prevs': str(block.previous)})
+                self.block_time.pop(block_id)
 
     def commit(self, my_pub_key):
         """
