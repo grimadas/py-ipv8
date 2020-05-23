@@ -240,8 +240,6 @@ class PlexusCommunity(Community):
     def gossip_sync_task(self, community_id):
         frontier = self.persistence.get_frontier(community_id)
         self.logger.debug('Gossip sync %s (%s) ', community_id, frontier)
-        if not frontier:
-            self.logger.debug('Known blocks: %s', self.persistence.get_all_blocks())
         if frontier and 'v' in frontier:
             seq_num = max(frontier['v'])[0]
             # Include the state in the frontier dissemination or not?

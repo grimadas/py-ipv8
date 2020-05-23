@@ -17,9 +17,13 @@ class PlexusSettings(object):
 
     def __init__(self):
         # Time to verify received frontiers
-        self.sync_timeout = 0.6
+        self.sync_timeout = 1.5
 
-        # Track personal chains of all neighbors (e.g., join the community around a peer when receiving an introduction response from it)
+        # Sync round time in seconds
+        self.sync_time = 1.0
+
+        # Track personal chains of all neighbors
+        # (e.g., join the community around a peer when receiving an introduction response from it)
         self.track_neighbours_chains = False
 
         # Gossip fanout for frontiers exchange
@@ -58,8 +62,6 @@ class PlexusSettings(object):
         # Ignore validation errors
         self.ignore_validation = False
 
-        # Sync round time in seconds
-        self.sync_time = 0.5
 
         # Security mode
         self.security_mode = SecurityMode.VANILLA
