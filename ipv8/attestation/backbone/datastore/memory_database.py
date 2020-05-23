@@ -178,7 +178,8 @@ class PlexusMemoryDatabase(object):
             blocks.update({self.get_block_by_short_hash(sh) for sh in chain.chain[b_i]})
         for sn, sh in request['c']:
             val = self.get_block_by_short_hash(sh)
-            blocks.add(val)
+            if val:
+                blocks.add(val)
         return blocks
 
     def get_block_class(self, block_type):
